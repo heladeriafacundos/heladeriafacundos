@@ -49,6 +49,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { UserAdminModal } from "@/components/user-admin-modal";
+import {
+  clearCurrentOfflineSession,
+  getCurrentOfflineSession,
+  getCurrentOfflineSyncToken,
+  rememberOfflineSession,
+} from "@/lib/auth/offline-session";
 import type { SessionUser, UserRole } from "@/lib/auth/user";
 import {
   countOfflineCashCloses,
@@ -79,13 +85,16 @@ type DesktopUpdaterStatus =
   | "not-available"
   | "downloading"
   | "downloaded"
+  | "updated"
   | "error";
 
 type DesktopUpdaterState = {
   currentVersion?: string;
   message?: string;
+  previousVersion?: string;
   progress?: number;
   status: DesktopUpdaterStatus;
+  updatedAt?: string;
   version?: string;
 };
 
@@ -580,8 +589,17 @@ const ARGENTINA_TIMEZONE = "America/Argentina/Buenos_Aires";
 const ARGENTINA_OFFSET = "-03:00";
 const THEME_STORAGE_KEY = "gestion-local.diseno";
 const OFFLINE_DATA_STORAGE_KEY_PREFIX = "gestion-local.ultimo-dato";
+const OFFLINE_SESSION_HEADER = "x-erp-offline-session";
 const getOfflineDataStorageKey = (user: SessionUser) =>
   `${OFFLINE_DATA_STORAGE_KEY_PREFIX}.${user.id}.${user.role}`;
+const getOfflineAuthHeaders = (): Record<string, string> => {
+  const token = getCurrentOfflineSyncToken();
+  return token ? { [OFFLINE_SESSION_HEADER]: token } : {};
+};
+const getJsonAuthHeaders = () => ({
+  "Content-Type": "application/json",
+  ...getOfflineAuthHeaders(),
+});
 const DEFAULT_FONT_FAMILY =
   "var(--font-geist-sans), system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const BRAND_FONT_FAMILY = "'Great Vibes', 'Dancing Script', cursive";
@@ -3372,9 +3390,10 @@ export function GestionLocalErp() {
     setIsLoadingData(true);
     const offlineDataStorageKey = user ? getOfflineDataStorageKey(user) : null;
 
-    const response = await fetch("/api/erp/datos", { cache: "no-store" }).catch(
-      () => null,
-    );
+    const response = await fetch("/api/erp/datos", {
+      cache: "no-store",
+      headers: getOfflineAuthHeaders(),
+    }).catch(() => null);
 
     if (!response?.ok) {
       setIsSupabaseReady(false);
@@ -3410,16 +3429,21 @@ export function GestionLocalErp() {
   };
 
   const loadSessionUser = async () => {
-    const response = await fetch("/api/auth/me", { cache: "no-store" }).catch(
-      () => null,
-    );
+    const response = await fetch("/api/auth/me", {
+      cache: "no-store",
+      headers: getOfflineAuthHeaders(),
+    }).catch(() => null);
 
     if (!response?.ok) {
-      setSessionUser(null);
-      return null;
+      const offlineUser = getCurrentOfflineSession();
+      setSessionUser(offlineUser);
+      return offlineUser;
     }
 
-    const data = (await response.json()) as SessionUser;
+    const data = (await response.json()) as SessionUser & {
+      offlineToken?: string;
+    };
+    await rememberOfflineSession(data, undefined, data.offlineToken);
     setSessionUser(data);
     return data;
   };
@@ -3600,7 +3624,7 @@ export function GestionLocalErp() {
     try {
       const response = await fetch(request.url, {
         method: request.method,
-        headers: { "Content-Type": "application/json" },
+        headers: getJsonAuthHeaders(),
         body: JSON.stringify(request.body),
       });
 
@@ -3636,7 +3660,7 @@ export function GestionLocalErp() {
   const submitSalePayload = async (payload: OfflineSalePayload) => {
     const response = await fetch("/api/erp/ventas", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getJsonAuthHeaders(),
       body: JSON.stringify(payload),
     });
 
@@ -3655,7 +3679,7 @@ export function GestionLocalErp() {
   const submitCashClosePayload = async (payload: OfflineCashClosePayload) => {
     const response = await fetch("/api/erp/cierres-caja", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getJsonAuthHeaders(),
       body: JSON.stringify(payload),
     });
 
@@ -3750,7 +3774,7 @@ export function GestionLocalErp() {
           if (operation.type === "mutation") {
             const response = await fetch(operation.record.request.url, {
               method: operation.record.request.method,
-              headers: { "Content-Type": "application/json" },
+              headers: getJsonAuthHeaders(),
               body: JSON.stringify(operation.record.request.body),
             });
             if (!response.ok) {
@@ -4876,7 +4900,7 @@ const saveAttendanceRecord = async (record: AttendanceForm) => {
 
   const handleCashierLogout = async () => {
     if (!window.navigator.onLine) {
-      setIsEndingCashierSession(true);
+      window.location.replace("/auth/login");
       return;
     }
 
@@ -4892,11 +4916,21 @@ const saveAttendanceRecord = async (record: AttendanceForm) => {
         const data = (await response.json().catch(() => null)) as
           | { error?: string }
           | null;
+        if (response.status >= 500) {
+          window.location.replace("/auth/login");
+          return;
+        }
         throw new Error(data?.error ?? "No se pudo cerrar sesión");
       }
 
+      clearCurrentOfflineSession();
       window.location.replace("/auth/login");
     } catch (error) {
+      if (error instanceof TypeError) {
+        window.location.replace("/auth/login");
+        return;
+      }
+
       setNotice(
         error instanceof Error
           ? error.message
@@ -5720,11 +5754,13 @@ function CashierExitModal({
     <div className="erp-modal-shell fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
       <div className="erp-modal-panel w-full max-w-xl overflow-hidden rounded-lg border border-white/10 bg-[#0d0f10] shadow-2xl">
         <div className="border-b border-white/10 px-5 py-4">
-          <p className="text-lg font-semibold text-zinc-100">Cerrar sesión</p>
+          <p className="text-lg font-semibold text-zinc-100">
+            {isOnline ? "Cerrar sesión" : "Cambiar usuario"}
+          </p>
           <p className="mt-1 text-sm text-zinc-400">
             {isOnline
               ? "Se va a cerrar la cuenta actual en esta computadora."
-              : "No se puede cerrar sesión mientras la caja está sin internet."}
+              : "Vas a volver al inicio de sesión offline de esta computadora."}
           </p>
         </div>
 
@@ -5739,7 +5775,7 @@ function CashierExitModal({
           >
             {isOnline
               ? "Las entradas y salidas de empleados se manejan desde la sección Empleados."
-              : "Si cerrás sesión sin conexión, después no vas a poder iniciar sesión hasta que vuelva internet. Por seguridad, la caja queda abierta para que puedan seguir trabajando."}
+              : "Podés entrar con cualquier usuario que ya haya iniciado sesión online en esta PC. La contraseña se verifica localmente."}
           </div>
         </div>
 
@@ -5753,16 +5789,14 @@ function CashierExitModal({
           >
             Cancelar
           </Button>
-          {isOnline && (
-            <Button
-              className="bg-cyan-300 font-semibold text-zinc-950 hover:bg-cyan-200"
-              disabled={isLoading}
-              onClick={onConfirm}
-              type="button"
-            >
-              Cerrar sesión
-            </Button>
-          )}
+          <Button
+            className="bg-cyan-300 font-semibold text-zinc-950 hover:bg-cyan-200"
+            disabled={isLoading}
+            onClick={onConfirm}
+            type="button"
+          >
+            {isOnline ? "Cerrar sesión" : "Cambiar usuario"}
+          </Button>
         </div>
       </div>
     </div>
@@ -7108,7 +7142,9 @@ function CierreCajaView({
   const isLastCloseBalanced = Math.abs(lastCloseDifference) < 0.01;
 
   const loadLastClose = async () => {
-    const response = await fetch("/api/erp/cierres-caja").catch(() => null);
+    const response = await fetch("/api/erp/cierres-caja", {
+      headers: getOfflineAuthHeaders(),
+    }).catch(() => null);
     const pendingCloses = await getOfflineCashCloses();
     const lastPendingClose = pendingCloses.at(-1);
     if (!response?.ok) {
@@ -7191,7 +7227,7 @@ function CierreCajaView({
     try {
       const response = await fetch("/api/erp/cierres-caja", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getJsonAuthHeaders(),
         body: JSON.stringify(payload),
       });
 
@@ -13832,6 +13868,26 @@ function DesktopUpdateButton({
       <div className="flex items-center gap-2 rounded-lg border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm font-semibold text-amber-100">
         <RefreshCw className="size-4 animate-spin" />
         Actualiza al sincronizar
+      </div>
+    );
+  }
+
+  if (update.status === "updated") {
+    return (
+      <div className="flex max-w-full items-center gap-3 rounded-lg border border-emerald-300/25 bg-emerald-300/10 px-3 py-2 text-emerald-100 shadow-[0_0_22px_rgba(52,211,153,0.08)]">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-emerald-300 text-zinc-950">
+          <CheckCircle2 className="size-5" />
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">
+            App actualizada a v{update.currentVersion ?? update.version ?? "-"}
+          </p>
+          <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-emerald-100/75">
+            <CalendarClock className="size-3.5 shrink-0" />
+            {update.updatedAt ? formatFullDateTime(update.updatedAt) : "Recien instalada"}
+            {update.previousVersion ? ` · antes v${update.previousVersion}` : ""}
+          </p>
+        </div>
       </div>
     );
   }

@@ -10,6 +10,11 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  authenticateOfflineUser,
+  rememberOfflineSession,
+} from "@/lib/auth/offline-session";
+import type { SessionUser } from "@/lib/auth/user";
 import { useState } from "react";
 
 const translateLoginError = (message: string) => {
@@ -46,12 +51,22 @@ export function LoginForm({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
+  const loginOffline = async () => {
+    await authenticateOfflineUser(username, password.trim());
+    window.location.replace("/");
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
 
     try {
+      if (!window.navigator.onLine) {
+        await loginOffline();
+        return;
+      }
+
       const loginResponse = await fetch("/api/auth/login", {
         method: "POST",
         cache: "no-store",
@@ -64,17 +79,47 @@ export function LoginForm({
 
       const loginData = (await loginResponse.json().catch(() => null)) as {
         error?: string;
+        offlineToken?: string;
+        usuario?: SessionUser;
       } | null;
 
       if (!loginResponse.ok) {
+        if (loginResponse.status >= 500) {
+          await loginOffline();
+          return;
+        }
+
         throw new Error(
           loginData?.error ?? "Usuario o contraseña incorrectos",
+        );
+      }
+
+      if (loginData?.usuario) {
+        await rememberOfflineSession(
+          loginData.usuario,
+          password.trim(),
+          loginData.offlineToken,
         );
       }
 
       window.location.replace("/");
       return;
     } catch (error: unknown) {
+      if (window.navigator.onLine && error instanceof TypeError) {
+        try {
+          await loginOffline();
+          return;
+        } catch (offlineError) {
+          setError(
+            offlineError instanceof Error
+              ? translateLoginError(offlineError.message)
+              : "No se pudo iniciar sesión sin internet",
+          );
+          setIsLoading(false);
+          return;
+        }
+      }
+
       setError(
         error instanceof Error
           ? translateLoginError(error.message)

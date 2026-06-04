@@ -7,10 +7,11 @@ const path = require("node:path");
 const PORT = 5123;
 const HOST = "127.0.0.1";
 const DEFAULT_UPDATE_URL =
-  "https://github.com/testeoparaweb/testeoparaweb/releases/latest/download";
+  "https://github.com/heladeriafacundos/heladeriafacundos/releases/latest/download";
 const AUTO_UPDATE_CHECK_DELAY_MS = 60000;
 const AUTO_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const SHOULD_AUTO_CHECK_UPDATES = process.env.ELECTRON_AUTO_UPDATE_CHECK !== "false";
+const UPDATE_HISTORY_FILE_NAME = "update-history.json";
 let serverStarted = false;
 let mainWindow;
 let updaterStatus = {
@@ -126,6 +127,72 @@ const getAppUrl = () =>
 const getCachedDesktopIcon = () => {
   const iconPath = path.join(app.getPath("userData"), "app-icon.png");
   return fs.existsSync(iconPath) ? iconPath : undefined;
+};
+
+const getUpdateHistoryPath = () =>
+  path.join(app.getPath("userData"), UPDATE_HISTORY_FILE_NAME);
+
+const readUpdateHistory = () => {
+  try {
+    const historyPath = getUpdateHistoryPath();
+    if (!fs.existsSync(historyPath)) return null;
+    return JSON.parse(fs.readFileSync(historyPath, "utf8"));
+  } catch {
+    return null;
+  }
+};
+
+const writeUpdateHistory = (history) => {
+  try {
+    fs.writeFileSync(getUpdateHistoryPath(), JSON.stringify(history, null, 2));
+  } catch {
+    // El aviso de actualizacion es informativo; la app puede seguir igual.
+  }
+};
+
+const refreshInstalledUpdateStatus = () => {
+  const currentVersion = app.getVersion();
+  const history = readUpdateHistory();
+
+  if (
+    history?.pendingInstallVersion === currentVersion &&
+    history?.lastVersion &&
+    history.lastVersion !== currentVersion
+  ) {
+    const updatedAt = new Date().toISOString();
+    const nextHistory = {
+      lastInstalledAt: updatedAt,
+      lastVersion: currentVersion,
+      previousVersion: history.lastVersion,
+    };
+    writeUpdateHistory(nextHistory);
+    updaterStatus = {
+      currentVersion,
+      message: "Actualizacion instalada correctamente",
+      previousVersion: history.lastVersion,
+      status: "updated",
+      updatedAt,
+      version: currentVersion,
+    };
+    return;
+  }
+
+  if (!history?.lastVersion) {
+    writeUpdateHistory({
+      lastInstalledAt: new Date().toISOString(),
+      lastVersion: currentVersion,
+    });
+    updaterStatus = {
+      ...updaterStatus,
+      currentVersion,
+    };
+    return;
+  }
+
+  updaterStatus = {
+    ...updaterStatus,
+    currentVersion,
+  };
 };
 
 const sendUpdaterStatus = (nextStatus) => {
@@ -279,6 +346,11 @@ ipcMain.handle("updater:download", async () => {
   return downloadUpdateSafely();
 });
 ipcMain.handle("updater:install", () => {
+  writeUpdateHistory({
+    lastVersion: app.getVersion(),
+    pendingInstallAt: new Date().toISOString(),
+    pendingInstallVersion: updaterStatus.version,
+  });
   autoUpdater.quitAndInstall(false, true);
 });
 
@@ -330,6 +402,7 @@ const createWindow = async () => {
 if (gotSingleInstanceLock) {
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
+    refreshInstalledUpdateStatus();
     void createWindow();
 
     app.on("activate", () => {

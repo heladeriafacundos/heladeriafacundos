@@ -5,7 +5,7 @@ import { getSessionUser } from "@/lib/auth/user";
 
 const installerFileName = `Caja.Heladeria.Setup.${packageJson.version}.exe`;
 const defaultInstallerBaseUrl =
-  "https://github.com/testeoparaweb/testeoparaweb/releases/latest/download";
+  "https://github.com/heladeriafacundos/heladeriafacundos/releases/latest/download";
 const installerBaseUrl =
   process.env.DESKTOP_INSTALLER_BASE_URL ||
   process.env.NEXT_PUBLIC_DESKTOP_INSTALLER_BASE_URL ||

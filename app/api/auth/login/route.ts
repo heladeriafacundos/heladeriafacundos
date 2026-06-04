@@ -7,6 +7,7 @@ import {
   getUserUsername,
   isAdminEmail,
 } from "@/lib/auth/user";
+import { createOfflineSessionToken } from "@/lib/auth/offline-token";
 import { createClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
@@ -48,15 +49,18 @@ export async function POST(request: Request) {
       );
     }
 
-    return NextResponse.json({
-      usuario: {
+    const sessionUser = {
         id: data.user.id,
         email: data.user.email ?? null,
         username: getUserUsername(data.user),
         name: getUserName(data.user),
         isAdmin: isAdminEmail(data.user.email),
         role: getUserRole(data.user),
-      },
+      };
+
+    return NextResponse.json({
+      offlineToken: createOfflineSessionToken(sessionUser),
+      usuario: sessionUser,
     });
   } catch (error) {
     return NextResponse.json(

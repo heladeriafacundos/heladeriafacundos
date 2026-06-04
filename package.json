@@ -1,6 +1,6 @@
 {
   "name": "caja-heladeria",
-  "version": "1.0.4",
+  "version": "1.0.7",
   "description": "Caja de escritorio para heladeria con modo offline",
   "author": {
     "name": "cph.dev"
@@ -8,7 +8,7 @@
   "copyright": "Copyright (c) 2026 cph.dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/testeoparaweb/testeoparaweb.git"
+    "url": "https://github.com/heladeriafacundos/heladeriafacundos.git"
   },
   "private": true,
   "main": "electron/main.cjs",
@@ -32,7 +32,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://github.com/testeoparaweb/testeoparaweb/releases/latest/download"
+        "url": "https://github.com/heladeriafacundos/heladeriafacundos/releases/latest/download"
       }
     ],
     "files": [

@@ -1,17 +1,30 @@
 "use client";
 
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 export function LogoutButton() {
-  const router = useRouter();
+  const [isLoading, setIsLoading] = useState(false);
 
   const logout = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push("/auth/login");
+    setIsLoading(true);
+
+    const response = await fetch("/api/auth/logout", {
+      method: "POST",
+      cache: "no-store",
+    }).catch(() => null);
+
+    if (response?.ok) {
+      window.location.replace("/auth/login");
+      return;
+    }
+
+    setIsLoading(false);
   };
 
-  return <Button onClick={logout}>Logout</Button>;
+  return (
+    <Button disabled={isLoading} onClick={logout} size="sm" variant="outline">
+      {isLoading ? "Cerrando..." : "Cerrar sesión"}
+    </Button>
+  );
 }

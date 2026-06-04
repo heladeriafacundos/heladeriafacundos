@@ -1,11 +1,14 @@
+import { AuthShell } from "@/components/auth-shell";
 import { ForgotPasswordForm } from "@/components/forgot-password-form";
 
 export default function Page() {
   return (
-    <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
-      <div className="w-full max-w-sm">
+    <AuthShell
+      description="Si ya tenés acceso, podés recuperar tu contraseña desde acá sin abrir el registro público."
+      eyebrow="Soporte de acceso"
+      title="Recuperar contraseña"
+    >
         <ForgotPasswordForm />
-      </div>
-    </div>
+    </AuthShell>
   );
 }

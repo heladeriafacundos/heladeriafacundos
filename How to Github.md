@@ -16,7 +16,7 @@ Este repositorio contiene el código fuente para [nombre de la página web]. Aqu
 ### 1️⃣ Clonar o Actualizar el Repositorio
 Si es la primera vez que descargas el repositorio, clónalo con:
 ```sh
-git clone https://github.com/heladeriafacundos/heladeriafacundos.git
+git clone https://github.com/testeoparaweb/testeoparaweb.git
 ```
 
 Si ya tienes el repositorio clonado y solo quieres actualizarlo con los últimos cambios, usa:

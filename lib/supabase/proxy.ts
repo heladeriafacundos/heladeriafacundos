@@ -46,14 +46,44 @@ export async function updateSession(request: NextRequest) {
   // with the Supabase client, your users may be randomly logged out.
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims;
+  const pathname = request.nextUrl.pathname;
+  const isApiRequest = pathname.startsWith("/api/");
+  const isLoginRequest = pathname === "/auth/login";
+  const isPublicAuthPage =
+    pathname === "/auth/login" ||
+    pathname === "/auth/forgot-password" ||
+    pathname === "/auth/update-password" ||
+    pathname.startsWith("/auth/confirm") ||
+    pathname.startsWith("/auth/error");
+  const isBlockedSignUpPage =
+    pathname === "/auth/sign-up" || pathname === "/auth/sign-up-success";
+  const isPublicApiRoute =
+    pathname === "/api/auth/login" ||
+    pathname === "/api/erp/app-icon" ||
+    pathname === "/api/erp/manifest.webmanifest" ||
+    (pathname === "/api/erp/diseno" && request.method === "GET");
+  const isProtectedApiRoute =
+    pathname.startsWith("/api/erp") ||
+    pathname === "/api/auth/me" ||
+    pathname === "/api/auth/usuarios";
 
-  if (
-    request.nextUrl.pathname !== "/" &&
-    !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
-  ) {
-    // no user, potentially respond by redirecting the user to the login page
+  if (isBlockedSignUpPage) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/auth/login";
+    return NextResponse.redirect(url);
+  }
+
+  if (user && isLoginRequest) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/";
+    return NextResponse.redirect(url);
+  }
+
+  if (!user && isProtectedApiRoute && !isPublicApiRoute) {
+    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  }
+
+  if (!user && !isPublicAuthPage && !isPublicApiRoute && !isApiRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/auth/login";
     return NextResponse.redirect(url);

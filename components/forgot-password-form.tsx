@@ -47,53 +47,66 @@ export function ForgotPasswordForm({
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       {success ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-2xl">Check Your Email</CardTitle>
-            <CardDescription>Password reset instructions sent</CardDescription>
+        <Card className="border-white/10 bg-[#101315] text-zinc-100 shadow-2xl">
+          <CardHeader className="border-b border-white/10">
+            <CardTitle className="text-2xl text-zinc-100">
+              Revisá tu email
+            </CardTitle>
+            <CardDescription className="text-zinc-400">
+              Te enviamos las instrucciones para cambiar la contraseña
+            </CardDescription>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              If you registered using your email and password, you will receive
-              a password reset email.
+          <CardContent className="pt-6">
+            <p className="text-sm leading-6 text-zinc-400">
+              Si ese email está registrado, va a recibir un enlace para cambiar
+              la contraseña.
             </p>
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-2xl">Reset Your Password</CardTitle>
-            <CardDescription>
-              Type in your email and we&apos;ll send you a link to reset your
-              password
+        <Card className="border-white/10 bg-[#101315] text-zinc-100 shadow-2xl">
+          <CardHeader className="border-b border-white/10">
+            <CardTitle className="text-2xl text-zinc-100">
+              Recuperar contraseña
+            </CardTitle>
+            <CardDescription className="text-zinc-400">
+              Escribí tu email y te mandamos un enlace para cambiar la
+              contraseña
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-6">
             <form onSubmit={handleForgotPassword}>
               <div className="flex flex-col gap-6">
                 <div className="grid gap-2">
-                  <Label htmlFor="email">Email</Label>
+                  <Label className="text-zinc-300" htmlFor="email">
+                    Email
+                  </Label>
                   <Input
+                    className="border-white/10 bg-[#080a0c] text-zinc-100 placeholder:text-zinc-500"
                     id="email"
                     type="email"
-                    placeholder="m@example.com"
+                    placeholder="usuario@local.com"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                   />
                 </div>
-                {error && <p className="text-sm text-red-500">{error}</p>}
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Sending..." : "Send reset email"}
+                {error && <p className="text-sm text-rose-300">{error}</p>}
+                <Button
+                  type="submit"
+                  className="w-full bg-cyan-300 font-semibold text-zinc-950 hover:bg-cyan-200"
+                  disabled={isLoading}
+                >
+                  {isLoading ? "Enviando..." : "Enviar enlace"}
                 </Button>
               </div>
-              <div className="mt-4 text-center text-sm">
-                Already have an account?{" "}
+              <div className="mt-4 text-center text-sm text-zinc-500">
+                ¿Ya tenés una cuenta?{" "}
                 <Link
                   href="/auth/login"
-                  className="underline underline-offset-4"
+                  className="text-cyan-200 underline-offset-4 hover:underline"
                 >
-                  Login
+                  Volver al login
                 </Link>
               </div>
             </form>

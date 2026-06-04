@@ -12,6 +12,7 @@ const AUTO_UPDATE_CHECK_DELAY_MS = 60000;
 const AUTO_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const SHOULD_AUTO_CHECK_UPDATES = process.env.ELECTRON_AUTO_UPDATE_CHECK !== "false";
 const UPDATE_HISTORY_FILE_NAME = "update-history.json";
+const DESKTOP_USER_AGENT_MARKER = "CajaHeladeriaDesktop";
 let serverStarted = false;
 let mainWindow;
 let updaterStatus = {
@@ -351,7 +352,7 @@ ipcMain.handle("updater:install", () => {
     pendingInstallAt: new Date().toISOString(),
     pendingInstallVersion: updaterStatus.version,
   });
-  autoUpdater.quitAndInstall(false, true);
+  autoUpdater.quitAndInstall(true, true);
 });
 
 const createWindow = async () => {
@@ -381,6 +382,10 @@ const createWindow = async () => {
     },
   });
   mainWindow = win;
+  const currentUserAgent = win.webContents.getUserAgent();
+  win.webContents.setUserAgent(
+    `${currentUserAgent} ${DESKTOP_USER_AGENT_MARKER}/${app.getVersion()}`,
+  );
   win.setMenuBarVisibility(false);
   win.removeMenu();
 

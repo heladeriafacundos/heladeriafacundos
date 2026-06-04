@@ -230,7 +230,8 @@ export const authenticateOfflineUser = async (
   }
 
   if (!record.verifier) {
-    throw new Error("Ese usuario tiene que entrar una vez con internet para activar el acceso offline");
+    setCurrentOfflineSession(record.user);
+    return record.user;
   }
 
   const isValidPassword = await verifyPassword(password, record.verifier);

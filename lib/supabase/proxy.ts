@@ -47,7 +47,12 @@ export async function updateSession(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims;
   const pathname = request.nextUrl.pathname;
+  const userAgent = request.headers.get("user-agent") ?? "";
   const isApiRequest = pathname.startsWith("/api/");
+  const isDesktopAppRequest = userAgent.includes("CajaHeladeriaDesktop");
+  const hasOfflineSessionHeader = Boolean(
+    request.headers.get("x-erp-offline-session"),
+  );
   const isLoginRequest = pathname === "/auth/login";
   const isPublicAuthPage =
     pathname === "/auth/login" ||
@@ -79,8 +84,17 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (!user && isProtectedApiRoute && !isPublicApiRoute) {
+  if (
+    !user &&
+    isProtectedApiRoute &&
+    !isPublicApiRoute &&
+    !hasOfflineSessionHeader
+  ) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  }
+
+  if (!user && isDesktopAppRequest && !isApiRequest) {
+    return supabaseResponse;
   }
 
   if (!user && !isPublicAuthPage && !isPublicApiRoute && !isApiRequest) {

@@ -581,6 +581,26 @@ type ErpDataResponse = {
   diseno?: Partial<ThemeSettings> | null;
 };
 
+type OfflineUiSnapshot = {
+  attendance: Attendance[];
+  auditLogs: AuditLog[];
+  channelCommissions: Record<SaleChannel, number>;
+  commissionHistory: CommissionHistory[];
+  expenseHistory: ExpenseHistory[];
+  expenses: Expense[];
+  flavorBatches: FlavorBatch[];
+  iceCreamFlavors: IceCreamFlavor[];
+  paymentMethod: string;
+  paymentMethodCommissions: Record<string, number>;
+  paymentMethods: string[];
+  products: Product[];
+  saleItems: SaleItem[];
+  sales: Sale[];
+  staff: StaffMember[];
+  themeSettings: ThemeSettings;
+  updatedAt: string;
+};
+
 const DEFAULT_BRANCH_ID = "00000000-0000-0000-0000-000000000001";
 const PAGE_SIZE = 6;
 const SHIFT_DAY_START_HOUR = 6;
@@ -589,9 +609,12 @@ const ARGENTINA_TIMEZONE = "America/Argentina/Buenos_Aires";
 const ARGENTINA_OFFSET = "-03:00";
 const THEME_STORAGE_KEY = "gestion-local.diseno";
 const OFFLINE_DATA_STORAGE_KEY_PREFIX = "gestion-local.ultimo-dato";
+const OFFLINE_UI_SNAPSHOT_KEY_PREFIX = "gestion-local.estado-local";
 const OFFLINE_SESSION_HEADER = "x-erp-offline-session";
 const getOfflineDataStorageKey = (user: SessionUser) =>
   `${OFFLINE_DATA_STORAGE_KEY_PREFIX}.${user.id}.${user.role}`;
+const getOfflineUiSnapshotKey = (user: SessionUser) =>
+  `${OFFLINE_UI_SNAPSHOT_KEY_PREFIX}.${user.id}.${user.role}`;
 const getOfflineAuthHeaders = (): Record<string, string> => {
   const token = getCurrentOfflineSyncToken();
   return token ? { [OFFLINE_SESSION_HEADER]: token } : {};
@@ -3284,11 +3307,14 @@ export function GestionLocalErp() {
   const [, setIsSupabaseReady] = useState(false);
   const [, setIsLoadingData] = useState(true);
   const [isOnline, setIsOnline] = useState(true);
+  const [dismissedDesktopUpdateNoticeKey, setDismissedDesktopUpdateNoticeKey] =
+    useState<string | null>(null);
   const [pendingOfflineSales, setPendingOfflineSales] = useState(0);
   const [isOfflineQueueReady, setIsOfflineQueueReady] = useState(false);
   const [isSyncingOfflineSales, setIsSyncingOfflineSales] = useState(false);
   const offlineSyncInProgressRef = useRef(false);
   const desktopUpdateActionInProgressRef = useRef(false);
+  const appliedOfflineSaleIdsRef = useRef<Set<string>>(new Set());
   const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdaterState>({
     status: "unsupported",
   });
@@ -3314,6 +3340,22 @@ export function GestionLocalErp() {
     }))
     .filter((group) => group.items.length > 0);
   const themeStyle = buildThemeStyle(themeSettings);
+  const desktopUpdateNoticeKey =
+    desktopUpdate.status === "updated"
+      ? `${desktopUpdate.currentVersion ?? desktopUpdate.version ?? ""}.${
+          desktopUpdate.updatedAt ?? ""
+        }`
+      : "";
+  const shouldShowDesktopUpdateNotice =
+    desktopUpdate.status === "updated" &&
+    desktopUpdateNoticeKey !== dismissedDesktopUpdateNoticeKey;
+  const closeDesktopUpdateNotice = () => {
+    setDismissedDesktopUpdateNoticeKey(desktopUpdateNoticeKey);
+    setDesktopUpdate((current) => ({
+      currentVersion: current.currentVersion,
+      status: "idle",
+    }));
+  };
 
   const applyThemeSettings = (settings: Partial<ThemeSettings> | null | undefined) => {
     const normalized = normalizeThemeSettings(settings);
@@ -3349,6 +3391,9 @@ export function GestionLocalErp() {
     );
     const hasSavedChannelCommissions = Boolean(data.comisiones_canales);
 
+    appliedOfflineSaleIdsRef.current = new Set(
+      (data.ventas ?? []).map((sale) => sale.id),
+    );
     setProducts((data.productos ?? []).map(mapProduct));
     setIceCreamFlavors((data.gustos ?? []).map(mapFlavor));
     setPaymentMethods(activePaymentMethods);
@@ -3383,6 +3428,49 @@ export function GestionLocalErp() {
     );
   };
 
+  const applyOfflineUiSnapshot = (snapshot: OfflineUiSnapshot) => {
+    appliedOfflineSaleIdsRef.current = new Set(
+      (snapshot.sales ?? []).map((sale) => sale.id),
+    );
+    setProducts(snapshot.products ?? []);
+    setIceCreamFlavors(snapshot.iceCreamFlavors ?? []);
+    setPaymentMethods(snapshot.paymentMethods ?? defaultPaymentMethods);
+    setPaymentMethodCommissions(
+      snapshot.paymentMethodCommissions ?? defaultPaymentMethodCommissions,
+    );
+    setChannelCommissions(
+      snapshot.channelCommissions ?? defaultChannelCommissions,
+    );
+    setSales(snapshot.sales ?? []);
+    setSaleItems(snapshot.saleItems ?? []);
+    setExpenses(snapshot.expenses ?? []);
+    setExpenseHistory(snapshot.expenseHistory ?? []);
+    setCommissionHistory(snapshot.commissionHistory ?? []);
+    setFlavorBatches(snapshot.flavorBatches ?? []);
+    setStaff(snapshot.staff ?? []);
+    setAttendance(snapshot.attendance ?? []);
+    setAuditLogs(snapshot.auditLogs ?? []);
+    applyThemeSettings(snapshot.themeSettings ?? defaultThemeSettings);
+    setPaymentMethod((current) =>
+      current && (snapshot.paymentMethods ?? []).includes(current)
+        ? current
+        : snapshot.paymentMethod ||
+          snapshot.paymentMethods?.[0] ||
+          defaultPaymentMethods[0] ||
+          "",
+    );
+  };
+
+  const loadOfflineUiSnapshot = (user: SessionUser) => {
+    try {
+      const cached = window.localStorage.getItem(getOfflineUiSnapshotKey(user));
+      return cached ? (JSON.parse(cached) as OfflineUiSnapshot) : null;
+    } catch {
+      window.localStorage.removeItem(getOfflineUiSnapshotKey(user));
+      return null;
+    }
+  };
+
   const loadData = async (
     successNotice = "Datos conectados con Supabase",
     user = sessionUser,
@@ -3398,12 +3486,23 @@ export function GestionLocalErp() {
     if (!response?.ok) {
       setIsSupabaseReady(false);
       setIsLoadingData(false);
+      if (user) {
+        const snapshot = loadOfflineUiSnapshot(user);
+        if (snapshot) {
+          applyOfflineUiSnapshot(snapshot);
+          await applyPendingOfflineSalesLocally();
+          setNotice("Sin internet: usando los datos locales guardados en esta PC");
+          return true;
+        }
+      }
+
       const cached = offlineDataStorageKey
         ? window.localStorage.getItem(offlineDataStorageKey)
         : null;
       if (cached) {
         try {
           applyErpData(JSON.parse(cached) as ErpDataResponse);
+          await applyPendingOfflineSalesLocally();
           setNotice("Sin internet: usando los últimos datos guardados en esta PC");
           return true;
         } catch {
@@ -3421,6 +3520,7 @@ export function GestionLocalErp() {
     if (offlineDataStorageKey) {
       window.localStorage.setItem(offlineDataStorageKey, JSON.stringify(data));
     }
+    await applyPendingOfflineSalesLocally();
     window.localStorage.removeItem(OFFLINE_DATA_STORAGE_KEY_PREFIX);
     setIsSupabaseReady(true);
     setIsLoadingData(false);
@@ -3695,7 +3795,184 @@ export function GestionLocalErp() {
     }
   };
 
+  const updateCachedErpData = (
+    updater: (data: ErpDataResponse) => ErpDataResponse,
+  ) => {
+    const user = sessionUser ?? getCurrentOfflineSession();
+    if (!user) return;
+
+    const offlineDataStorageKey = getOfflineDataStorageKey(user);
+    const cached = window.localStorage.getItem(offlineDataStorageKey);
+    if (!cached) return;
+
+    try {
+      const data = JSON.parse(cached) as ErpDataResponse;
+      window.localStorage.setItem(
+        offlineDataStorageKey,
+        JSON.stringify(updater(data)),
+      );
+    } catch {
+      window.localStorage.removeItem(offlineDataStorageKey);
+    }
+  };
+
+  const persistOfflineSaleInCache = (record: OfflineSaleRecord) => {
+    updateCachedErpData((data) => {
+      if ((data.ventas ?? []).some((sale) => sale.id === record.sale.id)) {
+        return data;
+      }
+
+      const productAdjustments = new Map(
+        record.productAdjustments.map((item) => [item.id, item.quantity]),
+      );
+      const flavorAdjustments = new Map(
+        record.flavorAdjustments.map((item) => [item.id, item.quantity]),
+      );
+      const saleRow: SaleRow = {
+        id: record.sale.id,
+        cliente: record.sale.customer,
+        canal: record.sale.channel,
+        productos: record.sale.items,
+        metodo: record.sale.method,
+        hora: record.sale.time,
+        total: record.sale.total,
+        subtotal: record.sale.subtotal,
+        descuento: record.sale.discount,
+        creado: record.sale.createdAt,
+      };
+      const saleItemRows: SaleItemRow[] = record.saleItems.map((item) => ({
+        id: item.id,
+        venta_id: item.saleId,
+        producto_id: item.productId,
+        producto: item.product,
+        cantidad: item.quantity,
+        precio: item.price,
+        costo: item.cost,
+        total: item.total,
+        gustos: item.flavors,
+        creado: item.createdAt,
+      }));
+
+      return {
+        ...data,
+        productos: (data.productos ?? []).map((product) => {
+          const quantity = productAdjustments.get(product.id) ?? 0;
+          return quantity > 0
+            ? { ...product, stock: Math.max(0, toNumber(product.stock) - quantity) }
+            : product;
+        }),
+        gustos: (data.gustos ?? []).map((flavor) => {
+          const quantity = flavorAdjustments.get(flavor.id) ?? 0;
+          return quantity > 0
+            ? { ...flavor, stock: toNumber(flavor.stock ?? 0) - quantity }
+            : flavor;
+        }),
+        ventas: [saleRow, ...(data.ventas ?? [])],
+        items_venta: [...saleItemRows, ...(data.items_venta ?? [])],
+      };
+    });
+  };
+
+  const persistProductInCache = (product: Product) => {
+    const productRow: ProductRow = {
+      id: product.id,
+      nombre: product.name,
+      categoria: product.category,
+      precio: product.price,
+      costo: product.cost,
+      stock: product.stock,
+      stock_minimo: product.minStock,
+      unidad: product.unit,
+      imagen: product.imageUrl.trim() || null,
+      max_gustos: product.maxFlavors,
+      consumo_gustos: product.flavorUsage,
+    };
+
+    updateCachedErpData((data) => ({
+      ...data,
+      productos: (data.productos ?? []).some((item) => item.id === product.id)
+        ? (data.productos ?? []).map((item) =>
+            item.id === product.id ? productRow : item,
+          )
+        : [productRow, ...(data.productos ?? [])],
+    }));
+  };
+
+  const removeProductFromCache = (productId: string) => {
+    updateCachedErpData((data) => ({
+      ...data,
+      productos: (data.productos ?? []).filter((item) => item.id !== productId),
+    }));
+  };
+
+  const persistFlavorInCache = (flavor: IceCreamFlavor) => {
+    const flavorRow: FlavorRow = {
+      id: flavor.id,
+      nombre: flavor.name,
+      categoria: flavor.category,
+      disponible: flavor.available,
+      color: flavor.color,
+      stock: flavor.stock,
+      stock_minimo: flavor.minStock,
+      unidad: flavor.unit,
+    };
+
+    updateCachedErpData((data) => ({
+      ...data,
+      gustos: (data.gustos ?? []).some((item) => item.id === flavor.id)
+        ? (data.gustos ?? []).map((item) =>
+            item.id === flavor.id ? flavorRow : item,
+          )
+        : [flavorRow, ...(data.gustos ?? [])],
+    }));
+  };
+
+  const removeFlavorFromCache = (flavorId: string) => {
+    updateCachedErpData((data) => ({
+      ...data,
+      gustos: (data.gustos ?? []).filter((item) => item.id !== flavorId),
+    }));
+  };
+
+  const persistDeletedSaleInCache = (saleId: string) => {
+    updateCachedErpData((data) => {
+      const deletedItems = (data.items_venta ?? []).filter(
+        (item) => item.venta_id === saleId,
+      );
+      const productQuantities = deletedItems.reduce<Map<string, number>>(
+        (acc, item) => {
+          if (!item.producto_id) return acc;
+          acc.set(
+            item.producto_id,
+            (acc.get(item.producto_id) ?? 0) + toNumber(item.cantidad),
+          );
+          return acc;
+        },
+        new Map(),
+      );
+
+      return {
+        ...data,
+        ventas: (data.ventas ?? []).filter((sale) => sale.id !== saleId),
+        items_venta: (data.items_venta ?? []).filter(
+          (item) => item.venta_id !== saleId,
+        ),
+        productos: (data.productos ?? []).map((product) => {
+          const quantity = productQuantities.get(product.id) ?? 0;
+          return quantity > 0
+            ? { ...product, stock: toNumber(product.stock) + quantity }
+            : product;
+        }),
+      };
+    });
+  };
+
   const applyOfflineSaleLocally = (record: OfflineSaleRecord) => {
+    if (appliedOfflineSaleIdsRef.current.has(record.sale.id)) {
+      return;
+    }
+
+    appliedOfflineSaleIdsRef.current.add(record.sale.id);
     setSales((current) =>
       current.some((sale) => sale.id === record.sale.id)
         ? current
@@ -3728,6 +4005,12 @@ export function GestionLocalErp() {
           : flavor;
       }),
     );
+    persistOfflineSaleInCache(record);
+  };
+
+  const applyPendingOfflineSalesLocally = async () => {
+    const records = await getOfflineSales();
+    records.forEach(applyOfflineSaleLocally);
   };
 
   const syncPendingOfflineSales = async () => {
@@ -3821,12 +4104,7 @@ export function GestionLocalErp() {
     };
 
     setIsOnline(window.navigator.onLine);
-    void Promise.all([
-      refreshOfflineSaleCount(),
-      getOfflineSales().then((records) => {
-        records.forEach(applyOfflineSaleLocally);
-      }),
-    ]).finally(() => setIsOfflineQueueReady(true));
+    void refreshOfflineSaleCount().finally(() => setIsOfflineQueueReady(true));
     window.addEventListener("online", updateOnlineStatus);
     window.addEventListener("offline", updateOnlineStatus);
 
@@ -3835,6 +4113,58 @@ export function GestionLocalErp() {
       window.removeEventListener("offline", updateOnlineStatus);
     };
   }, []);
+
+  useEffect(() => {
+    if (!sessionUser || isBooting) return;
+
+    const snapshot: OfflineUiSnapshot = {
+      attendance,
+      auditLogs,
+      channelCommissions,
+      commissionHistory,
+      expenseHistory,
+      expenses,
+      flavorBatches,
+      iceCreamFlavors,
+      paymentMethod,
+      paymentMethodCommissions,
+      paymentMethods,
+      products,
+      saleItems,
+      sales,
+      staff,
+      themeSettings,
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      window.localStorage.setItem(
+        getOfflineUiSnapshotKey(sessionUser),
+        JSON.stringify(snapshot),
+      );
+    } catch {
+      // Si el almacenamiento local se llena, la cola offline sigue siendo la fuente segura.
+    }
+  }, [
+    attendance,
+    auditLogs,
+    channelCommissions,
+    commissionHistory,
+    expenseHistory,
+    expenses,
+    flavorBatches,
+    iceCreamFlavors,
+    isBooting,
+    paymentMethod,
+    paymentMethodCommissions,
+    paymentMethods,
+    products,
+    saleItems,
+    sales,
+    sessionUser,
+    staff,
+    themeSettings,
+  ]);
 
   useEffect(() => {
     if (sessionUser && isOnline && pendingOfflineSales > 0) {
@@ -4266,6 +4596,7 @@ export function GestionLocalErp() {
             ? current.map((item) => (item.id === id ? localProduct : item))
             : [localProduct, ...current],
         );
+        persistProductInCache(localProduct);
         return true;
       }
 
@@ -4287,6 +4618,7 @@ export function GestionLocalErp() {
 
       if (result.queued) {
         setProducts((current) => current.filter((item) => item.id !== product.id));
+        removeProductFromCache(product.id);
         return true;
       }
 
@@ -4448,6 +4780,7 @@ export function GestionLocalErp() {
             ? current.map((item) => (item.id === id ? localFlavor : item))
             : [localFlavor, ...current],
         );
+        persistFlavorInCache(localFlavor);
         return true;
       }
 
@@ -4471,6 +4804,7 @@ export function GestionLocalErp() {
         setIceCreamFlavors((current) =>
           current.filter((item) => item.id !== flavor.id),
         );
+        removeFlavorFromCache(flavor.id);
         return true;
       }
 
@@ -4520,9 +4854,10 @@ export function GestionLocalErp() {
 
         return restoredQuantity > 0
           ? { ...flavor, stock: flavor.stock + restoredQuantity }
-          : flavor;
+        : flavor;
       }),
     );
+    persistDeletedSaleInCache(sale.id);
   };
 
   const performDeleteSale = async (sale: Sale) => {
@@ -5479,6 +5814,11 @@ const saveAttendanceRecord = async (record: AttendanceForm) => {
             isOpen={isUsersOpen}
             onClose={() => setIsUsersOpen(false)}
           />
+          <DesktopUpdateInstalledModal
+            isOpen={shouldShowDesktopUpdateNotice}
+            onClose={closeDesktopUpdateNotice}
+            update={desktopUpdate}
+          />
           <CashierExitModal
             isOnline={isOnline}
             isLoading={isCashierActionLoading}
@@ -5796,6 +6136,86 @@ function CashierExitModal({
             type="button"
           >
             {isOnline ? "Cerrar sesión" : "Cambiar usuario"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DesktopUpdateInstalledModal({
+  isOpen,
+  onClose,
+  update,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  update: DesktopUpdaterState;
+}) {
+  if (!isOpen) return null;
+
+  const version = update.currentVersion ?? update.version ?? "-";
+  const updatedAt = update.updatedAt
+    ? formatFullDateTime(update.updatedAt)
+    : "Recien instalada";
+
+  return (
+    <div className="erp-modal-shell fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+      <div className="erp-modal-panel w-full max-w-md overflow-hidden rounded-lg border border-emerald-300/25 bg-[#0d0f10] shadow-2xl shadow-emerald-950/30">
+        <div className="flex items-start gap-4 border-b border-white/10 px-5 py-5">
+          <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-emerald-300 text-zinc-950 shadow-[0_0_24px_rgba(52,211,153,0.22)]">
+            <CheckCircle2 className="size-6" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-lg font-semibold text-zinc-100">
+              Actualizacion instalada
+            </p>
+            <p className="mt-1 text-sm text-zinc-400">
+              La caja quedo actualizada y lista para seguir trabajando.
+            </p>
+          </div>
+          <Button
+            className="size-9 shrink-0 border-white/10 bg-white/5 p-0 text-zinc-100 hover:bg-white/10"
+            onClick={onClose}
+            type="button"
+            variant="outline"
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+
+        <div className="space-y-3 p-5">
+          <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200/80">
+              Version actual
+            </p>
+            <p className="mt-1 text-2xl font-bold text-emerald-100">v{version}</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                Fecha
+              </p>
+              <p className="mt-2 text-sm font-semibold text-zinc-100">{updatedAt}</p>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                Anterior
+              </p>
+              <p className="mt-2 text-sm font-semibold text-zinc-100">
+                {update.previousVersion ? `v${update.previousVersion}` : "-"}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end border-t border-white/10 px-5 py-4">
+          <Button
+            className="bg-emerald-300 font-semibold text-zinc-950 hover:bg-emerald-200"
+            onClick={onClose}
+            type="button"
+          >
+            Cerrar
           </Button>
         </div>
       </div>
@@ -13872,27 +14292,11 @@ function DesktopUpdateButton({
     );
   }
 
-  if (update.status === "updated") {
-    return (
-      <div className="flex max-w-full items-center gap-3 rounded-lg border border-emerald-300/25 bg-emerald-300/10 px-3 py-2 text-emerald-100 shadow-[0_0_22px_rgba(52,211,153,0.08)]">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-emerald-300 text-zinc-950">
-          <CheckCircle2 className="size-5" />
-        </div>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">
-            App actualizada a v{update.currentVersion ?? update.version ?? "-"}
-          </p>
-          <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-emerald-100/75">
-            <CalendarClock className="size-3.5 shrink-0" />
-            {update.updatedAt ? formatFullDateTime(update.updatedAt) : "Recien instalada"}
-            {update.previousVersion ? ` · antes v${update.previousVersion}` : ""}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (update.status === "idle" || update.status === "not-available") {
+  if (
+    update.status === "idle" ||
+    update.status === "not-available" ||
+    update.status === "updated"
+  ) {
     return (
       <Button
         className="border-white/10 bg-white/5 text-zinc-100 hover:bg-white/10"

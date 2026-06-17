@@ -7,12 +7,14 @@ type ProductoPayload = {
   id: string;
   nombre: string;
   categoria: string;
+  categoria_icono?: string;
   precio: number;
   costo: number;
   stock: number;
   stock_minimo: number;
   unidad: string;
   imagen: string | null;
+  icono?: string;
   max_gustos: number;
   consumo_gustos: number;
   stock_anterior?: number;
@@ -26,14 +28,22 @@ export async function POST(request: Request) {
     const body = (await request.json()) as ProductoPayload;
     const supabase = createAdminClient();
 
-    const categoria = await supabase.from("categorias").upsert({
+    let categoria = await supabase.from("categorias").upsert({
       nombre: body.categoria,
+      icono: body.categoria_icono ?? "package",
     });
+
+    if (categoria.error?.code === "42703" || categoria.error?.code === "PGRST204") {
+      categoria = await supabase.from("categorias").upsert({
+        nombre: body.categoria,
+      });
+    }
+
     if (categoria.error) {
       return NextResponse.json({ error: categoria.error.message }, { status: 500 });
     }
 
-    const producto = await supabase.from("productos").upsert(
+    let producto = await supabase.from("productos").upsert(
       {
         id: body.id,
         nombre: body.nombre,
@@ -44,12 +54,34 @@ export async function POST(request: Request) {
         stock_minimo: body.stock_minimo,
         unidad: body.unidad,
         imagen: body.imagen,
+        icono: body.icono ?? "package",
         max_gustos: body.max_gustos,
         consumo_gustos: body.consumo_gustos,
         activo: true,
       },
       { onConflict: "id" },
     );
+
+    if (producto.error?.code === "42703" || producto.error?.code === "PGRST204") {
+      producto = await supabase.from("productos").upsert(
+        {
+          id: body.id,
+          nombre: body.nombre,
+          categoria: body.categoria,
+          precio: body.precio,
+          costo: body.costo,
+          stock: body.stock,
+          stock_minimo: body.stock_minimo,
+          unidad: body.unidad,
+          imagen: body.imagen,
+          max_gustos: body.max_gustos,
+          consumo_gustos: body.consumo_gustos,
+          activo: true,
+        },
+        { onConflict: "id" },
+      );
+    }
+
     if (producto.error) {
       return NextResponse.json({ error: producto.error.message }, { status: 500 });
     }

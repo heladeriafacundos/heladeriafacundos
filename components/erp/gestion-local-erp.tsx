@@ -202,6 +202,11 @@ type DeleteConfirmation = {
   onConfirm: () => Promise<boolean>;
 };
 
+type CategoryOption = {
+  icon: string;
+  name: string;
+};
+
 type Product = {
   id: string;
   name: string;
@@ -212,11 +217,14 @@ type Product = {
   minStock: number;
   unit: string;
   imageUrl: string;
+  icon: string;
   maxFlavors: number;
   flavorUsage: number;
 };
 
-type ProductForm = Product;
+type ProductForm = Product & {
+  categoryIcon: string;
+};
 
 type IceCreamFlavor = {
   id: string;
@@ -229,7 +237,9 @@ type IceCreamFlavor = {
   unit: string;
 };
 
-type FlavorForm = IceCreamFlavor;
+type FlavorForm = IceCreamFlavor & {
+  categoryIcon: string;
+};
 type QuickStockTarget =
   | { item: Product; type: "product" }
   | { item: IceCreamFlavor; type: "flavor" };
@@ -244,6 +254,7 @@ type CartLine = {
   quantity: number;
   unit: string;
   imageUrl: string;
+  icon: string;
   flavors: string[];
   flavorUsage: number;
 };
@@ -437,8 +448,14 @@ type ProductRow = {
   stock_minimo: NumericValue;
   unidad: string;
   imagen: string | null;
+  icono?: string | null;
   max_gustos: number | null;
   consumo_gustos?: NumericValue;
+};
+
+type CategoryRow = {
+  nombre: string;
+  icono?: string | null;
 };
 
 type FlavorRow = {
@@ -565,6 +582,7 @@ type AttendanceRow = {
 };
 
 type ErpDataResponse = {
+  categorias?: CategoryRow[];
   productos: ProductRow[];
   gustos: FlavorRow[];
   metodos_pago: PaymentMethodRow[];
@@ -584,6 +602,7 @@ type ErpDataResponse = {
 type OfflineUiSnapshot = {
   attendance: Attendance[];
   auditLogs: AuditLog[];
+  categoryOptions: CategoryOption[];
   channelCommissions: Record<SaleChannel, number>;
   commissionHistory: CommissionHistory[];
   expenseHistory: ExpenseHistory[];
@@ -726,6 +745,29 @@ const defaultChannelCommissions: Record<SaleChannel, number> = {
 };
 
 const defaultFlavorCategories = ["Crema", "Chocolate", "Frutal", "Al agua", "Especial"];
+
+const DEFAULT_CATEGORY_ICON_ID = "package";
+
+const categoryIconOptions: Array<{
+  icon: LucideIcon;
+  id: string;
+  label: string;
+}> = [
+  { id: "snowflake", label: "Helado", icon: Snowflake },
+  { id: "coffee", label: "Cafe", icon: Coffee },
+  { id: "store", label: "Local", icon: Store },
+  { id: "package", label: "Producto", icon: Package },
+  { id: "cart", label: "Caja", icon: ShoppingCart },
+  { id: "flame", label: "Caliente", icon: Flame },
+  { id: "money", label: "Promo", icon: BadgeDollarSign },
+  { id: "receipt", label: "Dulce", icon: ReceiptText },
+  { id: "wallet", label: "Combo", icon: WalletCards },
+  { id: "card", label: "Bebida", icon: CreditCard },
+  { id: "sun", label: "Desayuno", icon: SunMedium },
+  { id: "palette", label: "Especial", icon: Palette },
+];
+
+const categoryIconIds = new Set(categoryIconOptions.map((option) => option.id));
 
 const employeeRoleOptions = [
   "Encargado/a",
@@ -2846,22 +2888,72 @@ const formatCategoryLabel = (category: string) => {
   return replacements[normalized] ?? label;
 };
 
-const getProductCategoryIcon = (category: string): LucideIcon => {
+const normalizeCategoryIconId = (iconId?: string | null) =>
+  iconId && categoryIconIds.has(iconId) ? iconId : DEFAULT_CATEGORY_ICON_ID;
+
+const inferCategoryIconId = (category: string) => {
   const normalized = formatCategoryLabel(category)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
 
-  if (normalized === "helado") return Snowflake;
-  if (normalized === "cafe") return Coffee;
-  if (normalized === "salado") return Store;
-  if (normalized === "dulce") return ReceiptText;
-  if (normalized === "bebida") return CreditCard;
-  if (normalized === "aperitivo") return WalletCards;
-  if (normalized === "desayuno") return SunMedium;
-  if (normalized === "promo") return BadgeDollarSign;
+  if (normalized === "helado") return "snowflake";
+  if (normalized === "cafe") return "coffee";
+  if (normalized === "salado") return "store";
+  if (normalized === "dulce") return "receipt";
+  if (normalized === "bebida") return "card";
+  if (normalized === "aperitivo") return "wallet";
+  if (normalized === "desayuno") return "sun";
+  if (normalized === "promo") return "money";
 
-  return Package;
+  return DEFAULT_CATEGORY_ICON_ID;
+};
+
+const getCategoryIconOption = (iconId?: string | null) =>
+  categoryIconOptions.find((option) => option.id === iconId) ??
+  categoryIconOptions.find((option) => option.id === DEFAULT_CATEGORY_ICON_ID) ??
+  categoryIconOptions[0];
+
+const getCategoryIconId = (
+  category: string,
+  categories: CategoryOption[] = [],
+) => {
+  const categoryName = category.trim();
+  const savedCategory = categories.find((item) => item.name === categoryName);
+
+  return savedCategory?.icon ?? inferCategoryIconId(categoryName);
+};
+
+const getProductCategoryIcon = (
+  category: string,
+  categories: CategoryOption[] = [],
+): LucideIcon => getCategoryIconOption(getCategoryIconId(category, categories)).icon;
+
+const buildCategoryOptions = (
+  categories: CategoryRow[] = [],
+  products: ProductRow[] = [],
+  flavors: FlavorRow[] = [],
+) => {
+  const options = new Map<string, CategoryOption>();
+
+  const addCategory = (name?: string | null, icon?: string | null) => {
+    const categoryName = name?.trim();
+    if (!categoryName || options.has(categoryName)) return;
+
+    options.set(categoryName, {
+      name: categoryName,
+      icon: normalizeCategoryIconId(icon ?? inferCategoryIconId(categoryName)),
+    });
+  };
+
+  categories.forEach((category) => addCategory(category.nombre, category.icono));
+  products.forEach((product) => addCategory(product.categoria));
+  flavors.forEach((flavor) => addCategory(getFlavorCategoryName(flavor.categoria)));
+  defaultFlavorCategories.forEach((category) => addCategory(category));
+
+  return Array.from(options.values()).sort((left, right) =>
+    left.name.localeCompare(right.name, "es-AR"),
+  );
 };
 
 const groupFlavorsByCategory = (flavors: IceCreamFlavor[]) => {
@@ -3092,6 +3184,7 @@ const mapProduct = (product: ProductRow): Product => ({
   minStock: toNumber(product.stock_minimo),
   unit: product.unidad,
   imageUrl: normalizeProductImageUrl(product.imagen),
+  icon: normalizeCategoryIconId(product.icono),
   maxFlavors: product.max_gustos ?? 0,
   flavorUsage: toNumber(product.consumo_gustos ?? 0),
 });
@@ -3263,6 +3356,7 @@ export function GestionLocalErp() {
     useState<DeleteConfirmation | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<CategoryOption[]>([]);
   const [iceCreamFlavors, setIceCreamFlavors] = useState<IceCreamFlavor[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<string[]>([]);
   const [paymentMethodCommissions, setPaymentMethodCommissions] =
@@ -3395,6 +3489,9 @@ export function GestionLocalErp() {
       (data.ventas ?? []).map((sale) => sale.id),
     );
     setProducts((data.productos ?? []).map(mapProduct));
+    setCategoryOptions(
+      buildCategoryOptions(data.categorias ?? [], data.productos ?? [], data.gustos ?? []),
+    );
     setIceCreamFlavors((data.gustos ?? []).map(mapFlavor));
     setPaymentMethods(activePaymentMethods);
     setPaymentMethodCommissions(methodCommissions);
@@ -3433,6 +3530,36 @@ export function GestionLocalErp() {
       (snapshot.sales ?? []).map((sale) => sale.id),
     );
     setProducts(snapshot.products ?? []);
+    setCategoryOptions(
+      snapshot.categoryOptions ??
+        buildCategoryOptions(
+          [],
+          (snapshot.products ?? []).map((product) => ({
+            id: product.id,
+            nombre: product.name,
+            categoria: product.category,
+            precio: product.price,
+            costo: product.cost,
+            stock: product.stock,
+            stock_minimo: product.minStock,
+            unidad: product.unit,
+            imagen: product.imageUrl,
+            icono: product.icon,
+            max_gustos: product.maxFlavors,
+            consumo_gustos: product.flavorUsage,
+          })),
+          (snapshot.iceCreamFlavors ?? []).map((flavor) => ({
+            id: flavor.id,
+            nombre: flavor.name,
+            categoria: flavor.category,
+            disponible: flavor.available,
+            color: flavor.color,
+            stock: flavor.stock,
+            stock_minimo: flavor.minStock,
+            unidad: flavor.unit,
+          })),
+        ),
+    );
     setIceCreamFlavors(snapshot.iceCreamFlavors ?? []);
     setPaymentMethods(snapshot.paymentMethods ?? defaultPaymentMethods);
     setPaymentMethodCommissions(
@@ -3873,7 +4000,10 @@ export function GestionLocalErp() {
     });
   };
 
-  const persistProductInCache = (product: Product) => {
+  const persistProductInCache = (product: Product & { categoryIcon?: string }) => {
+    const productCategoryIcon = normalizeCategoryIconId(
+      product.categoryIcon ?? getCategoryIconId(product.category, categoryOptions),
+    );
     const productRow: ProductRow = {
       id: product.id,
       nombre: product.name,
@@ -3884,12 +4014,26 @@ export function GestionLocalErp() {
       stock_minimo: product.minStock,
       unidad: product.unit,
       imagen: product.imageUrl.trim() || null,
+      icono: product.icon,
       max_gustos: product.maxFlavors,
       consumo_gustos: product.flavorUsage,
     };
 
     updateCachedErpData((data) => ({
       ...data,
+      categorias: (data.categorias ?? []).some((item) => item.nombre === product.category)
+        ? (data.categorias ?? []).map((item) =>
+            item.nombre === product.category
+              ? { ...item, icono: productCategoryIcon }
+              : item,
+          )
+        : [
+            {
+              nombre: product.category,
+              icono: productCategoryIcon,
+            },
+            ...(data.categorias ?? []),
+          ],
       productos: (data.productos ?? []).some((item) => item.id === product.id)
         ? (data.productos ?? []).map((item) =>
             item.id === product.id ? productRow : item,
@@ -3905,7 +4049,10 @@ export function GestionLocalErp() {
     }));
   };
 
-  const persistFlavorInCache = (flavor: IceCreamFlavor) => {
+  const persistFlavorInCache = (flavor: IceCreamFlavor & { categoryIcon?: string }) => {
+    const flavorCategoryIcon = normalizeCategoryIconId(
+      flavor.categoryIcon ?? getCategoryIconId(flavor.category, categoryOptions),
+    );
     const flavorRow: FlavorRow = {
       id: flavor.id,
       nombre: flavor.name,
@@ -3919,6 +4066,19 @@ export function GestionLocalErp() {
 
     updateCachedErpData((data) => ({
       ...data,
+      categorias: (data.categorias ?? []).some((item) => item.nombre === flavor.category)
+        ? (data.categorias ?? []).map((item) =>
+            item.nombre === flavor.category
+              ? { ...item, icono: flavorCategoryIcon }
+              : item,
+          )
+        : [
+            {
+              nombre: flavor.category,
+              icono: flavorCategoryIcon,
+            },
+            ...(data.categorias ?? []),
+          ],
       gustos: (data.gustos ?? []).some((item) => item.id === flavor.id)
         ? (data.gustos ?? []).map((item) =>
             item.id === flavor.id ? flavorRow : item,
@@ -4120,6 +4280,7 @@ export function GestionLocalErp() {
     const snapshot: OfflineUiSnapshot = {
       attendance,
       auditLogs,
+      categoryOptions,
       channelCommissions,
       commissionHistory,
       expenseHistory,
@@ -4148,6 +4309,7 @@ export function GestionLocalErp() {
   }, [
     attendance,
     auditLogs,
+    categoryOptions,
     channelCommissions,
     commissionHistory,
     expenseHistory,
@@ -4316,6 +4478,7 @@ export function GestionLocalErp() {
           quantity: 1,
           unit: product.unit,
           imageUrl: product.imageUrl,
+          icon: product.icon,
           flavors,
           flavorUsage: product.flavorUsage,
         },
@@ -4571,12 +4734,14 @@ export function GestionLocalErp() {
         id,
         nombre: product.name.trim(),
         categoria: product.category.trim(),
+        categoria_icono: normalizeCategoryIconId(product.categoryIcon),
         precio: product.price,
         costo: product.cost,
         stock: product.stock,
         stock_minimo: product.minStock,
         unidad: product.unit.trim() || "unid.",
         imagen: product.imageUrl.trim() || null,
+        icono: normalizeCategoryIconId(product.icon),
         max_gustos: product.maxFlavors,
         consumo_gustos: product.flavorUsage,
         stock_anterior: previousStock,
@@ -4591,12 +4756,28 @@ export function GestionLocalErp() {
 
       if (result.queued) {
         const localProduct: Product = { ...product, id };
+        const localCategory: CategoryOption = {
+          name: product.category.trim(),
+          icon: normalizeCategoryIconId(product.categoryIcon),
+        };
         setProducts((current) =>
           current.some((item) => item.id === id)
             ? current.map((item) => (item.id === id ? localProduct : item))
             : [localProduct, ...current],
         );
-        persistProductInCache(localProduct);
+        setCategoryOptions((current) =>
+          current.some((item) => item.name === localCategory.name)
+            ? current.map((item) =>
+                item.name === localCategory.name ? localCategory : item,
+              )
+            : [...current, localCategory].sort((left, right) =>
+                left.name.localeCompare(right.name, "es-AR"),
+              ),
+        );
+        persistProductInCache({
+          ...localProduct,
+          categoryIcon: product.categoryIcon,
+        });
         return true;
       }
 
@@ -4753,6 +4934,7 @@ export function GestionLocalErp() {
         id,
         nombre: flavor.name.trim(),
         categoria: getFlavorCategoryName(flavor.category),
+        categoria_icono: normalizeCategoryIconId(flavor.categoryIcon),
         disponible: flavor.available,
         color: flavor.color,
         stock: flavor.stock,
@@ -4768,11 +4950,16 @@ export function GestionLocalErp() {
       });
 
       if (result.queued) {
+        const categoryName = getFlavorCategoryName(flavor.category);
+        const localCategory: CategoryOption = {
+          name: categoryName,
+          icon: normalizeCategoryIconId(flavor.categoryIcon),
+        };
         const localFlavor: IceCreamFlavor = {
           ...flavor,
           id,
           name: flavor.name.trim(),
-          category: getFlavorCategoryName(flavor.category),
+          category: categoryName,
           unit: flavor.unit.trim() || "porciones",
         };
         setIceCreamFlavors((current) =>
@@ -4780,7 +4967,19 @@ export function GestionLocalErp() {
             ? current.map((item) => (item.id === id ? localFlavor : item))
             : [localFlavor, ...current],
         );
-        persistFlavorInCache(localFlavor);
+        setCategoryOptions((current) =>
+          current.some((item) => item.name === localCategory.name)
+            ? current.map((item) =>
+                item.name === localCategory.name ? localCategory : item,
+              )
+            : [...current, localCategory].sort((left, right) =>
+                left.name.localeCompare(right.name, "es-AR"),
+              ),
+        );
+        persistFlavorInCache({
+          ...localFlavor,
+          categoryIcon: flavor.categoryIcon,
+        });
         return true;
       }
 
@@ -5636,6 +5835,7 @@ const saveAttendanceRecord = async (record: AttendanceForm) => {
               <CajaView
                 cartItems={cartItems}
                 category={category}
+                categoryOptions={categoryOptions}
                 categories={categories}
                 canSeeFinancialDetails={canManageBusiness}
                 channelCommissions={channelCommissions}
@@ -5759,6 +5959,7 @@ const saveAttendanceRecord = async (record: AttendanceForm) => {
             {safeActiveView === "stock" && (
               <StockView
                 canManageStock={canManageBusiness}
+                categoryOptions={categoryOptions}
                 closeFlavorBatch={closeFlavorBatch}
                 deleteFlavorBatch={deleteFlavorBatch}
                 deleteFlavor={deleteFlavor}
@@ -6325,6 +6526,7 @@ function CompactFilterGroup<T extends string>({
 function CajaView({
   cartItems,
   category,
+  categoryOptions,
   categories,
   canSeeFinancialDetails,
   channelCommissions,
@@ -6365,6 +6567,7 @@ function CajaView({
 }: {
   cartItems: CartLine[];
   category: string;
+  categoryOptions: CategoryOption[];
   categories: string[];
   canSeeFinancialDetails: boolean;
   channelCommissions: Record<SaleChannel, number>;
@@ -6437,7 +6640,7 @@ function CajaView({
   const categoryCards = realCategories.map((item) => ({
       id: item,
       label: formatCategoryLabel(item),
-      icon: getProductCategoryIcon(item),
+      icon: getProductCategoryIcon(item, categoryOptions),
     }));
   const channelCommissionRate = channelCommissions[saleChannel] ?? 0;
   const paymentCommissionRate = paymentMethodCommissions[paymentMethod] ?? 0;
@@ -6659,6 +6862,7 @@ function CajaView({
                 const reachedLimit = quantityInCart >= product.stock;
                 const unavailable = product.stock <= 0 || reachedLimit;
                 const isLow = isProductLowStock(product);
+                const ProductIcon = getCategoryIconOption(product.icon).icon;
 
                 return (
                   <button
@@ -6684,10 +6888,13 @@ function CajaView({
                           style={{ backgroundImage: `url("${product.imageUrl}")` }}
                         />
                       ) : (
-                        <div className="flex size-full items-center justify-center bg-[#0f1213] text-zinc-500">
-                          <Package className="size-9" />
+                        <div className="flex size-full items-center justify-center bg-[#0f1213] text-cyan-100">
+                          <ProductIcon className="size-10" />
                         </div>
                       )}
+                      <div className="absolute left-3 top-3 flex size-9 items-center justify-center rounded-lg border border-white/10 bg-black/55 text-cyan-100 backdrop-blur">
+                        <ProductIcon className="size-4" />
+                      </div>
                       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3">
                         <Badge className="border-white/10 bg-black/50 text-zinc-100 hover:bg-black/50">
                           {reachedLimit
@@ -6798,9 +7005,11 @@ function CajaView({
                       style={{ backgroundImage: `url("${selectedProduct.imageUrl}")` }}
                     />
                   ) : (
-                    <div className="absolute inset-0 flex items-center justify-center bg-[#0f1213] text-zinc-500">
-                      <Package className="size-12" />
-                    </div>
+                    <ProductIconFallback
+                      className="absolute inset-0"
+                      icon={selectedProduct.icon}
+                      iconClassName="size-12"
+                    />
                   )}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent" />
                   <button
@@ -6987,9 +7196,11 @@ function CajaView({
                         style={{ backgroundImage: `url("${item.imageUrl}")` }}
                       />
                     ) : (
-                      <div className="flex size-14 shrink-0 items-center justify-center rounded-lg bg-white/5 text-zinc-500 sm:size-16">
-                        <Package className="size-5" />
-                      </div>
+                      <ProductIconFallback
+                        className="size-14 shrink-0 rounded-lg sm:size-16"
+                        icon={item.icon}
+                        iconClassName="size-5"
+                      />
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
@@ -12029,6 +12240,7 @@ function AuditoriaView({ auditLogs }: { auditLogs: AuditLog[] }) {
 
 function StockView({
   canManageStock,
+  categoryOptions,
   closeFlavorBatch,
   deleteFlavorBatch,
   deleteFlavor,
@@ -12044,6 +12256,7 @@ function StockView({
   unitsInStock,
 }: {
   canManageStock: boolean;
+  categoryOptions: CategoryOption[];
   closeFlavorBatch: (batch: FlavorBatch, currentStock: number) => Promise<boolean>;
   deleteFlavorBatch: (batch: FlavorBatch) => void;
   deleteFlavor: (flavor: IceCreamFlavor) => void;
@@ -12066,12 +12279,14 @@ function StockView({
     id: "",
     name: "",
     category: "",
+    categoryIcon: DEFAULT_CATEGORY_ICON_ID,
     price: 0,
     cost: 0,
     stock: 0,
     minStock: 0,
     unit: "unid.",
     imageUrl: "",
+    icon: DEFAULT_CATEGORY_ICON_ID,
     maxFlavors: 0,
     flavorUsage: 0,
   };
@@ -12087,6 +12302,7 @@ function StockView({
     id: "",
     name: "",
     category: "Crema",
+    categoryIcon: getCategoryIconId("Crema", categoryOptions),
     available: true,
     color: "#67e8f9",
     stock: 0,
@@ -12147,18 +12363,43 @@ function StockView({
     "Todas",
     ...new Set(products.map((product) => product.category).sort((left, right) => left.localeCompare(right, "es-AR"))),
   ];
-  const productCategoryOptions = productCategories.filter(
-    (category) => category !== "Todas",
+  const productFormCategoryOptions = buildCategoryOptions(
+    categoryOptions.map((category) => ({
+      icono: category.icon,
+      nombre: category.name,
+    })),
+    products.map((product) => ({
+      id: product.id,
+      nombre: product.name,
+      categoria: product.category,
+      precio: product.price,
+      costo: product.cost,
+      stock: product.stock,
+      stock_minimo: product.minStock,
+      unidad: product.unit,
+      imagen: product.imageUrl,
+      icono: product.icon,
+      max_gustos: product.maxFlavors,
+      consumo_gustos: product.flavorUsage,
+    })),
   );
-  const flavorCategoryOptions = [
-    ...new Set(
-      [
-        ...defaultFlavorCategories,
-        ...flavors
-        .map((flavor) => getFlavorCategoryName(flavor.category))
-      ].sort((left, right) => left.localeCompare(right, "es-AR")),
-    ),
-  ];
+  const flavorCategoryOptions = buildCategoryOptions(
+    categoryOptions.map((category) => ({
+      icono: category.icon,
+      nombre: category.name,
+    })),
+    [],
+    flavors.map((flavor) => ({
+      id: flavor.id,
+      nombre: flavor.name,
+      categoria: flavor.category,
+      disponible: flavor.available,
+      color: flavor.color,
+      stock: flavor.stock,
+      stock_minimo: flavor.minStock,
+      unidad: flavor.unit,
+    })),
+  );
   const filteredProducts = products
     .filter((product) => {
       const matchesCategory =
@@ -12225,7 +12466,10 @@ function StockView({
   };
   const openEditProductModal = (product: Product) => {
     setEditingId(product.id);
-    setEditingProduct({ ...product });
+    setEditingProduct({
+      ...product,
+      categoryIcon: getCategoryIconId(product.category, categoryOptions),
+    });
   };
   const closeEditProductModal = () => {
     setEditingId(null);
@@ -12263,7 +12507,7 @@ function StockView({
       flavors.map((item) => item.id),
       newFlavor.id,
     );
-    const flavorToCreate: IceCreamFlavor = {
+    const flavorToCreate: FlavorForm = {
       ...newFlavor,
       id: flavorId,
       name: newFlavor.name.trim(),
@@ -12276,7 +12520,10 @@ function StockView({
   };
 
   const openEditFlavorModal = (flavor: IceCreamFlavor) => {
-    setEditingFlavor({ ...flavor });
+    setEditingFlavor({
+      ...flavor,
+      categoryIcon: getCategoryIconId(flavor.category, categoryOptions),
+    });
   };
 
   const closeEditFlavorModal = () => {
@@ -12313,12 +12560,20 @@ function StockView({
         ? await saveProduct(
             {
               ...quickStockTarget.item,
+              categoryIcon: getCategoryIconId(
+                quickStockTarget.item.category,
+                categoryOptions,
+              ),
               stock: quickStockNext,
             },
             quickStockTarget.item.stock,
           )
         : await saveFlavor({
             ...quickStockTarget.item,
+            categoryIcon: getCategoryIconId(
+              quickStockTarget.item.category,
+              categoryOptions,
+            ),
             stock: quickStockNext,
           });
 
@@ -12728,18 +12983,25 @@ function StockView({
                   <DarkPanel className="overflow-hidden" key={product.id}>
                     <div className="space-y-4 p-4">
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="truncate font-semibold text-zinc-100">
-                              {product.name}
+                        <div className="flex min-w-0 gap-3">
+                          <ProductIconFallback
+                            className="size-11 shrink-0 rounded-lg border border-white/10"
+                            icon={product.icon}
+                            iconClassName="size-5"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="truncate font-semibold text-zinc-100">
+                                {product.name}
+                              </p>
+                              <Badge className="border-white/10 bg-white/5 text-zinc-300 hover:bg-white/5">
+                                {formatCategoryLabel(product.category)}
+                              </Badge>
+                            </div>
+                            <p className="mt-1 text-sm text-zinc-500">
+                              {formatCurrency(product.price)}
                             </p>
-                            <Badge className="border-white/10 bg-white/5 text-zinc-300 hover:bg-white/5">
-                              {formatCategoryLabel(product.category)}
-                            </Badge>
                           </div>
-                          <p className="mt-1 text-sm text-zinc-500">
-                            {formatCurrency(product.price)}
-                          </p>
                         </div>
                         <Badge
                           className={cn(
@@ -12951,7 +13213,7 @@ function StockView({
           title="Agregar producto"
         >
           <ProductFields
-            categoryOptions={productCategoryOptions}
+            categoryOptions={productFormCategoryOptions}
             product={newProduct}
             setProduct={setNewProduct}
           />
@@ -12985,7 +13247,7 @@ function StockView({
           title="Editar producto"
         >
           <ProductFields
-            categoryOptions={productCategoryOptions}
+            categoryOptions={productFormCategoryOptions}
             product={editingProduct}
             setProduct={setEditingProduct}
           />
@@ -13270,7 +13532,7 @@ function ProductFields({
   product,
   setProduct,
 }: {
-  categoryOptions: string[];
+  categoryOptions: CategoryOption[];
   product: ProductForm;
   setProduct: React.Dispatch<React.SetStateAction<ProductForm>>;
 }) {
@@ -13285,7 +13547,11 @@ function ProductFields({
         />
         <ProductCategoryField
           categories={categoryOptions}
+          iconValue={product.categoryIcon}
           onChange={(value) => setProduct((current) => ({ ...current, category: value }))}
+          onIconChange={(value) =>
+            setProduct((current) => ({ ...current, categoryIcon: value }))
+          }
           value={product.category}
         />
       </div>
@@ -13330,8 +13596,18 @@ function ProductFields({
         open={product.imageUrl ? true : undefined}
       >
         <summary className="cursor-pointer select-none text-sm font-semibold text-zinc-100">
-          Imagen del producto opcional
+          Imagen e icono del producto
         </summary>
+        <div className="mt-3">
+          <IconPickerDetails
+            label="Icono propio del producto"
+            onChange={(value) =>
+              setProduct((current) => ({ ...current, icon: value }))
+            }
+            summary="Icono del producto"
+            value={product.icon}
+          />
+        </div>
         <ImageUploadControl
           carpeta="productos"
           className="mt-3"
@@ -13352,7 +13628,7 @@ function FlavorFields({
   flavor,
   setFlavor,
 }: {
-  categoryOptions: string[];
+  categoryOptions: CategoryOption[];
   flavor: FlavorForm;
   setFlavor: React.Dispatch<React.SetStateAction<FlavorForm>>;
 }) {
@@ -13369,9 +13645,13 @@ function FlavorFields({
         />
         <ProductCategoryField
           categories={categoryOptions}
+          iconValue={flavor.categoryIcon}
           label="Tipo de gusto"
           onChange={(value) =>
             setFlavor((current) => ({ ...current, category: value }))
+          }
+          onIconChange={(value) =>
+            setFlavor((current) => ({ ...current, categoryIcon: value }))
           }
           value={flavor.category}
         />
@@ -13407,7 +13687,7 @@ function EditFlavorFields({
   flavor,
   setFlavor,
 }: {
-  categoryOptions: string[];
+  categoryOptions: CategoryOption[];
   flavor: FlavorForm;
   setFlavor: React.Dispatch<React.SetStateAction<FlavorForm | null>>;
 }) {
@@ -13424,9 +13704,15 @@ function EditFlavorFields({
         />
         <ProductCategoryField
           categories={categoryOptions}
+          iconValue={flavor.categoryIcon}
           label="Tipo de gusto"
           onChange={(value) =>
             setFlavor((current) => (current ? { ...current, category: value } : current))
+          }
+          onIconChange={(value) =>
+            setFlavor((current) =>
+              current ? { ...current, categoryIcon: value } : current,
+            )
           }
           value={flavor.category}
         />
@@ -13456,19 +13742,28 @@ function EditFlavorFields({
 
 function ProductCategoryField({
   categories,
+  iconValue,
   label = "Categoría",
   onChange,
+  onIconChange,
   value,
 }: {
-  categories: string[];
+  categories: CategoryOption[];
+  iconValue: string;
   label?: string;
   onChange: (value: string) => void;
+  onIconChange: (value: string) => void;
   value: string;
 }) {
-  const selectedExistingCategory = categories.find((category) => category === value.trim());
+  const selectedExistingCategory = categories.find((category) => category.name === value.trim());
   const [isCreatingCategory, setIsCreatingCategory] = useState(false);
   const showNewCategoryInput =
     isCreatingCategory || categories.length === 0 || Boolean(value.trim() && !selectedExistingCategory);
+  const selectedIcon = getCategoryIconOption(normalizeCategoryIconId(iconValue));
+  const showIconPicker = showNewCategoryInput || Boolean(selectedExistingCategory);
+  const iconPickerLabel = selectedExistingCategory
+    ? `Icono de ${formatCategoryLabel(selectedExistingCategory.name)}`
+    : "Icono de la categoria";
 
   useEffect(() => {
     if (value.trim() && !selectedExistingCategory) {
@@ -13486,20 +13781,23 @@ function ProductCategoryField({
             if (event.target.value === "__new__") {
               setIsCreatingCategory(true);
               onChange("");
+              onIconChange(DEFAULT_CATEGORY_ICON_ID);
               return;
             }
 
+            const nextCategory = categories.find((category) => category.name === event.target.value);
             setIsCreatingCategory(false);
-            onChange(event.target.value);
+            onChange(nextCategory?.name ?? event.target.value);
+            onIconChange(nextCategory?.icon ?? inferCategoryIconId(event.target.value));
           }}
-          value={selectedExistingCategory ?? (showNewCategoryInput ? "__new__" : "")}
+          value={selectedExistingCategory?.name ?? (showNewCategoryInput ? "__new__" : "")}
         >
           <option value="" disabled>
             Elegir categoría
           </option>
           {categories.map((category) => (
-            <option key={category} value={category}>
-              {formatCategoryLabel(category)}
+            <option key={category.name} value={category.name}>
+              {formatCategoryLabel(category.name)}
             </option>
           ))}
           <option value="__new__">Crear categoría nueva</option>
@@ -13514,6 +13812,107 @@ function ProductCategoryField({
           value={selectedExistingCategory ? "" : value}
         />
       ) : null}
+
+      {showIconPicker ? (
+        <div className="mt-3">
+          <IconPickerDetails
+            label={iconPickerLabel}
+            onChange={onIconChange}
+            open={!selectedExistingCategory}
+            summary="Icono de la categoria"
+            value={selectedIcon.id}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function IconPickerDetails({
+  label,
+  onChange,
+  open,
+  summary,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  open?: boolean;
+  summary: string;
+  value: string;
+}) {
+  const selectedIcon = getCategoryIconOption(normalizeCategoryIconId(value));
+  const SelectedIcon = selectedIcon.icon;
+
+  return (
+    <details
+      className="rounded-lg border border-white/10 bg-black/20 p-3"
+      open={open}
+    >
+      <summary className="cursor-pointer select-none text-sm font-semibold text-zinc-100">
+        {summary}
+      </summary>
+      <div className="mt-3 space-y-3">
+        <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#080a0c] p-3">
+          <div className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-cyan-300/30 bg-cyan-300/10 text-cyan-100">
+            <SelectedIcon className="size-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold text-zinc-500">{label}</p>
+            <p className="truncate text-sm font-semibold text-zinc-100">
+              {selectedIcon.label}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+          {categoryIconOptions.map((option) => {
+            const Icon = option.icon;
+            const isSelected = normalizeCategoryIconId(value) === option.id;
+
+            return (
+              <button
+                className={cn(
+                  "flex h-12 items-center justify-center rounded-lg border transition",
+                  isSelected
+                    ? "border-cyan-200 bg-cyan-300 text-zinc-950"
+                    : "border-white/10 bg-[#080a0c] text-zinc-300 hover:border-cyan-300/40 hover:bg-white/10 hover:text-zinc-100",
+                )}
+                key={option.id}
+                onClick={() => onChange(option.id)}
+                title={option.label}
+                type="button"
+              >
+                <Icon className="size-5" />
+                <span className="sr-only">{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function ProductIconFallback({
+  className,
+  icon,
+  iconClassName = "size-9",
+}: {
+  className?: string;
+  icon: string;
+  iconClassName?: string;
+}) {
+  const Icon = getCategoryIconOption(icon).icon;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-center bg-[#0f1213] text-cyan-100",
+        className,
+      )}
+    >
+      <Icon className={iconClassName} />
     </div>
   );
 }

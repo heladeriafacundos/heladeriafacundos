@@ -12,8 +12,8 @@ export async function GET() {
     const canSeeManagementData =
       permission.user.role === "admin" || permission.user.role === "dueno";
     const productSelect = canSeeManagementData
-      ? "id,nombre,categoria,precio,costo,stock,stock_minimo,unidad,imagen,max_gustos,consumo_gustos"
-      : "id,nombre,categoria,precio,stock,stock_minimo,unidad,imagen,max_gustos,consumo_gustos";
+      ? "id,nombre,categoria,precio,costo,stock,stock_minimo,unidad,imagen,icono,max_gustos,consumo_gustos"
+      : "id,nombre,categoria,precio,stock,stock_minimo,unidad,imagen,icono,max_gustos,consumo_gustos";
     const paymentMethodSelect = canSeeManagementData
       ? "nombre,comision"
       : "nombre";
@@ -24,7 +24,8 @@ export async function GET() {
     const emptyConfig = Promise.resolve({ data: null, error: null });
 
     const [
-      productos,
+      categoriasConIcono,
+      productosConIcono,
       gustosConStock,
       metodosPago,
       ventasConCanal,
@@ -39,6 +40,11 @@ export async function GET() {
       comisionesCanales,
       auditoria,
     ] = await Promise.all([
+      supabase
+        .from("categorias")
+        .select("nombre,icono")
+        .order("orden", { ascending: true })
+        .order("nombre", { ascending: true }),
       supabase
         .from("productos")
         .select(productSelect)
@@ -123,6 +129,31 @@ export async function GET() {
         : emptyRows,
     ]);
 
+    const categorias =
+      categoriasConIcono.error?.code === "42703" ||
+      categoriasConIcono.error?.code === "PGRST204"
+        ? await supabase
+            .from("categorias")
+            .select("nombre")
+            .order("orden", { ascending: true })
+            .order("nombre", { ascending: true })
+        : categoriasConIcono;
+
+    const productos =
+      productosConIcono.error?.code === "42703" ||
+      productosConIcono.error?.code === "PGRST204"
+        ? await supabase
+            .from("productos")
+            .select(
+              canSeeManagementData
+                ? "id,nombre,categoria,precio,costo,stock,stock_minimo,unidad,imagen,max_gustos,consumo_gustos"
+                : "id,nombre,categoria,precio,stock,stock_minimo,unidad,imagen,max_gustos,consumo_gustos",
+            )
+            .eq("activo", true)
+            .order("categoria", { ascending: true })
+            .order("nombre", { ascending: true })
+        : productosConIcono;
+
     const gustos =
       gustosConStock.error?.code === "42703" ||
       gustosConStock.error?.code === "PGRST204"
@@ -184,6 +215,7 @@ export async function GET() {
         : auditoria.error;
 
     const error =
+      categorias.error ||
       productos.error ||
       gustosCompat.error ||
       metodosPago.error ||
@@ -204,6 +236,7 @@ export async function GET() {
     }
 
     return NextResponse.json({
+      categorias: categorias.data ?? [],
       productos: productos.data ?? [],
       gustos: gustosCompat.data ?? [],
       metodos_pago: metodosPago.data ?? [],

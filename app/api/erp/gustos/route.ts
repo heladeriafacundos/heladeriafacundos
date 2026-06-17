@@ -12,6 +12,7 @@ export async function POST(request: Request) {
       id: string;
       nombre: string;
       categoria?: string;
+      categoria_icono?: string;
       disponible: boolean;
       color: string;
       stock: number;
@@ -19,11 +20,27 @@ export async function POST(request: Request) {
       unidad: string;
     };
     const supabase = createAdminClient();
+    const categoriaNombre = body.categoria?.trim() || "Sin categoría";
+
+    let categoria = await supabase.from("categorias").upsert({
+      nombre: categoriaNombre,
+      icono: body.categoria_icono ?? "snowflake",
+    });
+
+    if (categoria.error?.code === "42703" || categoria.error?.code === "PGRST204") {
+      categoria = await supabase.from("categorias").upsert({
+        nombre: categoriaNombre,
+      });
+    }
+
+    if (categoria.error) {
+      return NextResponse.json({ error: categoria.error.message }, { status: 500 });
+    }
 
     const payload = {
       id: body.id,
       nombre: body.nombre,
-      categoria: body.categoria?.trim() || "Sin categoría",
+      categoria: categoriaNombre,
       disponible: body.disponible,
       color: body.color,
       stock: body.stock,

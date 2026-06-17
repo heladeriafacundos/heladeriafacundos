@@ -1,3 +1,4 @@
+import { AuthShell } from "@/components/auth-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Suspense } from "react";
 
@@ -11,12 +12,12 @@ async function ErrorContent({
   return (
     <>
       {params?.error ? (
-        <p className="text-sm text-muted-foreground">
-          Code error: {params.error}
+        <p className="text-sm leading-6 text-zinc-400">
+          Error de acceso: {params.error}
         </p>
       ) : (
-        <p className="text-sm text-muted-foreground">
-          An unspecified error occurred.
+        <p className="text-sm leading-6 text-zinc-400">
+          Ocurrió un error durante la autenticación.
         </p>
       )}
     </>
@@ -29,13 +30,16 @@ export default function Page({
   searchParams: Promise<{ error: string }>;
 }) {
   return (
-    <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
-      <div className="w-full max-w-sm">
+    <AuthShell
+      description="La autenticación no pudo completarse. Revisá el detalle y volvé a intentarlo."
+      eyebrow="Error de acceso"
+      title="No se pudo iniciar"
+    >
         <div className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-2xl">
-                Sorry, something went wrong.
+          <Card className="border-white/10 bg-[#101315] text-zinc-100 shadow-2xl">
+            <CardHeader className="border-b border-white/10">
+              <CardTitle className="text-2xl text-zinc-100">
+                Algo salió mal
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -45,7 +49,6 @@ export default function Page({
             </CardContent>
           </Card>
         </div>
-      </div>
-    </div>
+    </AuthShell>
   );
 }

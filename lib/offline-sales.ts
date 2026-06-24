@@ -71,6 +71,11 @@ const DB_VERSION = 3;
 const SALES_STORE_NAME = "pending-sales";
 const CASH_CLOSES_STORE_NAME = "pending-cash-closes";
 const MUTATIONS_STORE_NAME = "pending-json-mutations";
+const STORE_NAMES = [
+  SALES_STORE_NAME,
+  CASH_CLOSES_STORE_NAME,
+  MUTATIONS_STORE_NAME,
+] as const;
 
 const isBrowser = () => typeof window !== "undefined" && "indexedDB" in window;
 
@@ -224,5 +229,34 @@ export const countOfflineJsonMutations = async () => {
     );
   } catch {
     return 0;
+  }
+};
+
+export const clearOfflineQueues = async () => {
+  try {
+    const db = await openOfflineDb();
+
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction([...STORE_NAMES], "readwrite");
+
+      for (const storeName of STORE_NAMES) {
+        transaction.objectStore(storeName).clear();
+      }
+
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error ?? new Error("No se pudo limpiar la cola offline"));
+      };
+      transaction.onabort = () => {
+        db.close();
+        reject(transaction.error ?? new Error("Limpieza offline cancelada"));
+      };
+    });
+  } catch {
+    // Si IndexedDB no está disponible, no hay cola offline que limpiar.
   }
 };

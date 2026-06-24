@@ -9,6 +9,13 @@ export async function GET() {
     if (!permission.ok) return permission.response;
 
     const supabase = createAdminClient();
+    const projectRef = (() => {
+      try {
+        return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").host;
+      } catch {
+        return null;
+      }
+    })();
     const canSeeManagementData =
       permission.user.role === "admin" || permission.user.role === "dueno";
     const productSelect = canSeeManagementData
@@ -236,6 +243,7 @@ export async function GET() {
     }
 
     return NextResponse.json({
+      projectRef,
       categorias: categorias.data ?? [],
       productos: productos.data ?? [],
       gustos: gustosCompat.data ?? [],

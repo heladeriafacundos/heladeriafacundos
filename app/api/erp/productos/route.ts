@@ -27,15 +27,16 @@ export async function POST(request: Request) {
 
     const body = (await request.json()) as ProductoPayload;
     const supabase = createAdminClient();
+    const categoriaNombre = body.categoria?.trim() || "General";
 
     let categoria = await supabase.from("categorias").upsert({
-      nombre: body.categoria,
+      nombre: categoriaNombre,
       icono: body.categoria_icono ?? "package",
     });
 
     if (categoria.error?.code === "42703" || categoria.error?.code === "PGRST204") {
       categoria = await supabase.from("categorias").upsert({
-        nombre: body.categoria,
+        nombre: categoriaNombre,
       });
     }
 
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
       {
         id: body.id,
         nombre: body.nombre,
-        categoria: body.categoria,
+        categoria: categoriaNombre,
         precio: body.precio,
         costo: body.costo,
         stock: body.stock,
@@ -67,7 +68,7 @@ export async function POST(request: Request) {
         {
           id: body.id,
           nombre: body.nombre,
-          categoria: body.categoria,
+          categoria: categoriaNombre,
           precio: body.precio,
           costo: body.costo,
           stock: body.stock,
@@ -92,7 +93,7 @@ export async function POST(request: Request) {
       entidad_id: body.id,
       detalle: {
         nombre: body.nombre,
-        categoria: body.categoria,
+        categoria: categoriaNombre,
         precio: body.precio,
         costo: body.costo,
         stock: body.stock,
@@ -132,7 +133,7 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const permission = await requireRoles(["admin", "dueno"]);
+    const permission = await requireRoles(["admin", "dueno", "empleado"]);
     if (!permission.ok) return permission.response;
 
     const body = (await request.json()) as { id?: string };

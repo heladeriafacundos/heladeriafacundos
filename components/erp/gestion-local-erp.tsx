@@ -17,6 +17,7 @@ import {
   DollarSign,
   Flame,
   LayoutDashboard,
+  Loader2,
   Lightbulb,
   LogOut,
   Minus,
@@ -60,6 +61,7 @@ import {
   countOfflineCashCloses,
   countOfflineJsonMutations,
   countOfflineSales,
+  clearOfflineQueues,
   enqueueOfflineCashClose,
   enqueueOfflineJsonMutation,
   enqueueOfflineSale,
@@ -582,6 +584,7 @@ type AttendanceRow = {
 };
 
 type ErpDataResponse = {
+  projectRef?: string;
   categorias?: CategoryRow[];
   productos: ProductRow[];
   gustos: FlavorRow[];
@@ -615,6 +618,7 @@ type OfflineUiSnapshot = {
   products: Product[];
   saleItems: SaleItem[];
   sales: Sale[];
+  projectRef?: string;
   staff: StaffMember[];
   themeSettings: ThemeSettings;
   updatedAt: string;
@@ -629,6 +633,9 @@ const ARGENTINA_OFFSET = "-03:00";
 const THEME_STORAGE_KEY = "gestion-local.diseno";
 const OFFLINE_DATA_STORAGE_KEY_PREFIX = "gestion-local.ultimo-dato";
 const OFFLINE_UI_SNAPSHOT_KEY_PREFIX = "gestion-local.estado-local";
+const OFFLINE_PROJECT_REF_KEY = "gestion-local.supabase-project-ref";
+const OFFLINE_RESET_VERSION_KEY = "gestion-local.offline-reset-version";
+const OFFLINE_RESET_VERSION = "2026-06-24-clean-start-v2";
 const OFFLINE_SESSION_HEADER = "x-erp-offline-session";
 const getOfflineDataStorageKey = (user: SessionUser) =>
   `${OFFLINE_DATA_STORAGE_KEY_PREFIX}.${user.id}.${user.role}`;
@@ -3466,7 +3473,47 @@ export function GestionLocalErp() {
     applyBrowserBrandSettings(normalized);
   };
 
-  const applyErpData = (data: ErpDataResponse) => {
+  const clearOfflineDataCaches = () => {
+    const prefixes = [
+      OFFLINE_DATA_STORAGE_KEY_PREFIX,
+      OFFLINE_UI_SNAPSHOT_KEY_PREFIX,
+    ];
+
+    for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+      const key = window.localStorage.key(index);
+      if (key && prefixes.some((prefix) => key.startsWith(prefix))) {
+        window.localStorage.removeItem(key);
+      }
+    }
+  };
+
+  const resetOfflineLocalState = async () => {
+    clearOfflineDataCaches();
+    await clearOfflineQueues();
+    await refreshOfflineSaleCount();
+  };
+
+  const ensureOfflineResetVersion = async () => {
+    const currentResetVersion = window.localStorage.getItem(OFFLINE_RESET_VERSION_KEY);
+    if (currentResetVersion === OFFLINE_RESET_VERSION) return;
+
+    await resetOfflineLocalState();
+    window.localStorage.setItem(OFFLINE_RESET_VERSION_KEY, OFFLINE_RESET_VERSION);
+  };
+
+  const syncOfflineProjectRef = async (projectRef?: string | null) => {
+    if (!projectRef) return;
+
+    const previousProjectRef = window.localStorage.getItem(OFFLINE_PROJECT_REF_KEY);
+    if (previousProjectRef && previousProjectRef !== projectRef) {
+      await resetOfflineLocalState();
+    }
+
+    window.localStorage.setItem(OFFLINE_PROJECT_REF_KEY, projectRef);
+  };
+
+  const applyErpData = async (data: ErpDataResponse) => {
+    await syncOfflineProjectRef(data.projectRef);
     const methods = (data.metodos_pago ?? []).map((item) => item.nombre);
     const activePaymentMethods =
       methods.length > 0 ? methods : defaultPaymentMethods;
@@ -3589,10 +3636,18 @@ export function GestionLocalErp() {
     );
   };
 
-  const loadOfflineUiSnapshot = (user: SessionUser) => {
+  const loadOfflineUiSnapshot = (user: SessionUser, projectRef?: string | null) => {
     try {
       const cached = window.localStorage.getItem(getOfflineUiSnapshotKey(user));
-      return cached ? (JSON.parse(cached) as OfflineUiSnapshot) : null;
+      if (!cached) return null;
+
+      const snapshot = JSON.parse(cached) as OfflineUiSnapshot;
+      if (projectRef && snapshot.projectRef !== projectRef) {
+        window.localStorage.removeItem(getOfflineUiSnapshotKey(user));
+        return null;
+      }
+
+      return snapshot;
     } catch {
       window.localStorage.removeItem(getOfflineUiSnapshotKey(user));
       return null;
@@ -3614,8 +3669,17 @@ export function GestionLocalErp() {
     if (!response?.ok) {
       setIsSupabaseReady(false);
       setIsLoadingData(false);
+      if (response?.status === 401 && window.navigator.onLine) {
+        await resetOfflineLocalState();
+        setSessionUser(null);
+        setNotice("Sesión vencida. Volvé a iniciar sesión.");
+        window.location.replace("/auth/login");
+        return false;
+      }
+
       if (user) {
-        const snapshot = loadOfflineUiSnapshot(user);
+        const projectRef = window.localStorage.getItem(OFFLINE_PROJECT_REF_KEY);
+        const snapshot = loadOfflineUiSnapshot(user, projectRef);
         if (snapshot) {
           applyOfflineUiSnapshot(snapshot);
           await applyPendingOfflineSalesLocally();
@@ -3629,7 +3693,13 @@ export function GestionLocalErp() {
         : null;
       if (cached) {
         try {
-          applyErpData(JSON.parse(cached) as ErpDataResponse);
+          const cachedData = JSON.parse(cached) as ErpDataResponse;
+          const projectRef = window.localStorage.getItem(OFFLINE_PROJECT_REF_KEY);
+          if (projectRef && cachedData.projectRef !== projectRef) {
+            throw new Error("Cache de otro proyecto");
+          }
+
+          await applyErpData(cachedData);
           await applyPendingOfflineSalesLocally();
           setNotice("Sin internet: usando los últimos datos guardados en esta PC");
           return true;
@@ -3644,7 +3714,7 @@ export function GestionLocalErp() {
     }
 
     const data = (await response.json()) as ErpDataResponse;
-    applyErpData(data);
+    await applyErpData(data);
     if (offlineDataStorageKey) {
       window.localStorage.setItem(offlineDataStorageKey, JSON.stringify(data));
     }
@@ -3738,16 +3808,6 @@ export function GestionLocalErp() {
     setDesktopUpdate(status);
   };
 
-  const downloadDesktopUpdate = async () => {
-    if (!window.cajaUpdater) return;
-
-    const status = await window.cajaUpdater.download().catch(() => ({
-      message: "No se pudo descargar la actualización",
-      status: "error" as const,
-    }));
-    setDesktopUpdate(status);
-  };
-
   const installDesktopUpdate = () => {
     void window.cajaUpdater?.install();
   };
@@ -3760,6 +3820,8 @@ export function GestionLocalErp() {
     let isMounted = true;
 
     const boot = async () => {
+      await ensureOfflineResetVersion();
+
       try {
         const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
         if (savedTheme) {
@@ -4292,6 +4354,7 @@ export function GestionLocalErp() {
       paymentMethodCommissions,
       paymentMethods,
       products,
+      projectRef: window.localStorage.getItem(OFFLINE_PROJECT_REF_KEY) ?? undefined,
       saleItems,
       sales,
       staff,
@@ -5757,22 +5820,10 @@ const saveAttendanceRecord = async (record: AttendanceForm) => {
                       <DesktopUpdateButton
                         isWaitingForOfflineSync={isDesktopUpdateWaitingForSync}
                         onCheck={checkDesktopUpdate}
-                        onDownload={downloadDesktopUpdate}
                         onInstall={installDesktopUpdate}
                         update={desktopUpdate}
                       />
                     </div>
-                    <Button
-                      asChild
-                      className="erp-desktop-download-action border-cyan-300/30 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300/20"
-                      size="sm"
-                      variant="outline"
-                    >
-                      <a href="/api/desktop/installer">
-                        <ArrowDownCircle className="size-4" />
-                        Descargar
-                      </a>
-                    </Button>
                     <Button
                       className="border-white/10 bg-white/5 text-zinc-100 hover:bg-white/10"
                       onClick={() => setIsHelpOpen(true)}
@@ -5960,7 +6011,7 @@ const saveAttendanceRecord = async (record: AttendanceForm) => {
             {safeActiveView === "stock" && (
               <StockView
                 canManageCatalog={canManageCatalog}
-                canManageStock={canManageBusiness}
+                canManageStock={canManageCatalog}
                 categoryOptions={categoryOptions}
                 closeFlavorBatch={closeFlavorBatch}
                 deleteFlavorBatch={deleteFlavorBatch}
@@ -12282,7 +12333,7 @@ function StockView({
   const emptyProduct: ProductForm = {
     id: "",
     name: "",
-    category: "",
+    category: "General",
     categoryIcon: DEFAULT_CATEGORY_ICON_ID,
     price: 0,
     cost: 0,
@@ -12296,6 +12347,8 @@ function StockView({
   };
   const [newProduct, setNewProduct] = useState<ProductForm>(emptyProduct);
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
+  const [isSavingEditedProduct, setIsSavingEditedProduct] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingProduct, setEditingProduct] = useState<ProductForm>(emptyProduct);
   const [editingFlavor, setEditingFlavor] = useState<FlavorForm | null>(null);
@@ -12465,6 +12518,7 @@ function StockView({
     setIsCreatingProduct(true);
   };
   const closeProductForm = () => {
+    if (isSavingProduct) return;
     setIsCreatingProduct(false);
     setNewProduct(emptyProduct);
   };
@@ -12476,15 +12530,21 @@ function StockView({
     });
   };
   const closeEditProductModal = () => {
+    if (isSavingEditedProduct) return;
     setEditingId(null);
     setEditingProduct(emptyProduct);
   };
   const saveEditProductModal = async () => {
-    if (!editingId) return;
+    if (!editingId || isSavingEditedProduct) return;
 
+    setIsSavingEditedProduct(true);
     const originalProduct = products.find((product) => product.id === editingId);
     const saved = await saveProduct(editingProduct, originalProduct?.stock);
-    if (saved) closeEditProductModal();
+    if (saved) {
+      setEditingId(null);
+      setEditingProduct(emptyProduct);
+    }
+    setIsSavingEditedProduct(false);
   };
   const openFlavorForm = () => {
     setNewFlavor(emptyFlavor);
@@ -12874,18 +12934,14 @@ function StockView({
                                 >
                                   Editar gusto
                                 </DropdownMenuItem>
-                                {canManageStock ? (
-                                  <>
-                                    <DropdownMenuSeparator className="bg-white/10" />
-                                    <DropdownMenuItem
-                                      className="cursor-pointer text-rose-100 focus:bg-rose-300/10 focus:text-rose-100"
-                                      onClick={() => deleteFlavor(flavor)}
-                                    >
-                                      <Trash2 className="size-4" />
-                                      Eliminar gusto
-                                    </DropdownMenuItem>
-                                  </>
-                                ) : null}
+                                <DropdownMenuSeparator className="bg-white/10" />
+                                <DropdownMenuItem
+                                  className="cursor-pointer text-rose-100 focus:bg-rose-300/10 focus:text-rose-100"
+                                  onClick={() => deleteFlavor(flavor)}
+                                >
+                                  <Trash2 className="size-4" />
+                                  Eliminar gusto
+                                </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
                         </div>
@@ -13083,18 +13139,14 @@ function StockView({
                             >
                               Editar producto
                             </DropdownMenuItem>
-                            {canManageStock ? (
-                              <>
-                                <DropdownMenuSeparator className="bg-white/10" />
-                                <DropdownMenuItem
-                                  className="cursor-pointer text-rose-100 focus:bg-rose-300/10 focus:text-rose-100"
-                                  onClick={() => deleteProduct(product)}
-                                >
-                                  <Trash2 className="size-4" />
-                                  Eliminar producto
-                                </DropdownMenuItem>
-                              </>
-                            ) : null}
+                            <DropdownMenuSeparator className="bg-white/10" />
+                            <DropdownMenuItem
+                              className="cursor-pointer text-rose-100 focus:bg-rose-300/10 focus:text-rose-100"
+                              onClick={() => deleteProduct(product)}
+                            >
+                              <Trash2 className="size-4" />
+                              Eliminar producto
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
@@ -13235,6 +13287,7 @@ function StockView({
             <Button
               className="border-white/10 bg-white/5 text-zinc-100 hover:bg-white/10"
               onClick={closeProductForm}
+              disabled={isSavingProduct}
               type="button"
               variant="outline"
             >
@@ -13243,12 +13296,26 @@ function StockView({
             <Button
               className="bg-[var(--erp-primary)] font-semibold text-[var(--erp-primary-text)] hover:opacity-90"
               onClick={async () => {
+                if (isSavingProduct) return;
+                setIsSavingProduct(true);
                 const saved = await saveProduct(newProduct);
-                if (saved) closeProductForm();
+                if (saved) {
+                  setIsCreatingProduct(false);
+                  setNewProduct(emptyProduct);
+                }
+                setIsSavingProduct(false);
               }}
+              disabled={isSavingProduct}
               type="button"
             >
-              Guardar producto
+              {isSavingProduct ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Guardando...
+                </>
+              ) : (
+                "Guardar producto"
+              )}
             </Button>
           </div>
         </StockFormModal>
@@ -13269,6 +13336,7 @@ function StockView({
             <Button
               className="border-white/10 bg-white/5 text-zinc-100 hover:bg-white/10"
               onClick={closeEditProductModal}
+              disabled={isSavingEditedProduct}
               type="button"
               variant="outline"
             >
@@ -13277,9 +13345,17 @@ function StockView({
             <Button
               className="bg-[var(--erp-primary)] font-semibold text-[var(--erp-primary-text)] hover:opacity-90"
               onClick={saveEditProductModal}
+              disabled={isSavingEditedProduct}
               type="button"
             >
-              Guardar cambios
+              {isSavingEditedProduct ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Guardando...
+                </>
+              ) : (
+                "Guardar cambios"
+              )}
             </Button>
           </div>
         </StockFormModal>
@@ -14682,13 +14758,11 @@ function DisenoView({
 function DesktopUpdateButton({
   isWaitingForOfflineSync,
   onCheck,
-  onDownload,
   onInstall,
   update,
 }: {
   isWaitingForOfflineSync: boolean;
   onCheck: () => void;
-  onDownload: () => void;
   onInstall: () => void;
   update: DesktopUpdaterState;
 }) {
@@ -14728,13 +14802,13 @@ function DesktopUpdateButton({
     return (
       <Button
         className="border-cyan-300/30 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300/20"
-        onClick={onDownload}
+        disabled
         size="sm"
         type="button"
         variant="outline"
       >
         <ArrowDownCircle className="size-4" />
-        Descargar {update.version ? `v${update.version}` : "actualización"}
+        Preparando descarga
       </Button>
     );
   }

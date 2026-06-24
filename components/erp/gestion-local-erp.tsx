@@ -3420,6 +3420,7 @@ export function GestionLocalErp() {
     : allowedViews[0] ?? "caja";
   const canManageBusiness =
     sessionUser?.role === "admin" || sessionUser?.role === "dueno";
+  const canManageCatalog = Boolean(sessionUser);
   const visibleNavItems = navItems.filter((item) => allowedViews.includes(item.id));
   const helpGuideGroups = navGroups
     .map((group) => ({
@@ -5958,6 +5959,7 @@ const saveAttendanceRecord = async (record: AttendanceForm) => {
 
             {safeActiveView === "stock" && (
               <StockView
+                canManageCatalog={canManageCatalog}
                 canManageStock={canManageBusiness}
                 categoryOptions={categoryOptions}
                 closeFlavorBatch={closeFlavorBatch}
@@ -12239,6 +12241,7 @@ function AuditoriaView({ auditLogs }: { auditLogs: AuditLog[] }) {
 }
 
 function StockView({
+  canManageCatalog,
   canManageStock,
   categoryOptions,
   closeFlavorBatch,
@@ -12255,6 +12258,7 @@ function StockView({
   saveFlavor,
   unitsInStock,
 }: {
+  canManageCatalog: boolean;
   canManageStock: boolean;
   categoryOptions: CategoryOption[];
   closeFlavorBatch: (batch: FlavorBatch, currentStock: number) => Promise<boolean>;
@@ -12693,7 +12697,7 @@ function StockView({
         </div>
       </DarkPanel>
 
-      {!canManageStock && (
+      {!canManageCatalog && (
         <div className="rounded-lg border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-400">
           Esta vista es solo consulta para empleados. Los cambios de stock,
           productos y gustos los hacen admin o dueño.
@@ -12717,7 +12721,7 @@ function StockView({
                   <CalendarClock className="size-4" />
                   Historial
                 </Button>
-                {canManageStock ? (
+                {canManageCatalog ? (
                   <Button
                     className="w-full bg-cyan-300 font-semibold text-zinc-950 hover:bg-cyan-200 sm:w-auto"
                     onClick={openFlavorForm}
@@ -12822,9 +12826,9 @@ function StockView({
                           </p>
                         </div>
 
-                      {canManageStock && (
+                      {(canManageStock || canManageCatalog) && (
                         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
-                            {activeBatch ? (
+                            {canManageStock && activeBatch ? (
                               <Button
                                 className="w-full border-amber-300/30 bg-amber-300/10 text-amber-100 hover:bg-amber-300/20 sm:w-auto"
                                 onClick={async () => {
@@ -12836,7 +12840,7 @@ function StockView({
                               >
                                 Marcar balde vacío
                               </Button>
-                            ) : (
+                            ) : canManageStock ? (
                               <Button
                                 className="w-full border-emerald-300/30 bg-emerald-300/10 text-emerald-100 hover:bg-emerald-300/20 sm:w-auto"
                                 onClick={() => openFlavorBatchModal(flavor)}
@@ -12847,7 +12851,7 @@ function StockView({
                                 <Plus className="size-4" />
                                 Cargar balde
                               </Button>
-                            )}
+                            ) : null}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button
@@ -12870,14 +12874,18 @@ function StockView({
                                 >
                                   Editar gusto
                                 </DropdownMenuItem>
-                                <DropdownMenuSeparator className="bg-white/10" />
-                                <DropdownMenuItem
-                                  className="cursor-pointer text-rose-100 focus:bg-rose-300/10 focus:text-rose-100"
-                                  onClick={() => deleteFlavor(flavor)}
-                                >
-                                  <Trash2 className="size-4" />
-                                  Eliminar gusto
-                                </DropdownMenuItem>
+                                {canManageStock ? (
+                                  <>
+                                    <DropdownMenuSeparator className="bg-white/10" />
+                                    <DropdownMenuItem
+                                      className="cursor-pointer text-rose-100 focus:bg-rose-300/10 focus:text-rose-100"
+                                      onClick={() => deleteFlavor(flavor)}
+                                    >
+                                      <Trash2 className="size-4" />
+                                      Eliminar gusto
+                                    </DropdownMenuItem>
+                                  </>
+                                ) : null}
                               </DropdownMenuContent>
                             </DropdownMenu>
                         </div>
@@ -12900,7 +12908,7 @@ function StockView({
           <PanelHeader
             icon={Package}
             title="Productos"
-            right={canManageStock ? (
+            right={canManageCatalog ? (
               <Button
                 className="w-full bg-cyan-300 font-semibold text-zinc-950 hover:bg-cyan-200 sm:w-auto"
                 onClick={openProductForm}
@@ -13039,18 +13047,20 @@ function StockView({
                       </div>
 
                       <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
-                        <Button
-                          className="w-full border-emerald-300/30 bg-emerald-300/10 text-emerald-100 hover:bg-emerald-300/20 sm:w-auto"
-                          onClick={() =>
-                            openQuickStock({ item: product, type: "product" })
-                          }
-                          size="sm"
-                          type="button"
-                          variant="outline"
-                        >
-                          <Plus className="size-4" />
-                          Sumar stock
-                        </Button>
+                        {canManageStock ? (
+                          <Button
+                            className="w-full border-emerald-300/30 bg-emerald-300/10 text-emerald-100 hover:bg-emerald-300/20 sm:w-auto"
+                            onClick={() =>
+                              openQuickStock({ item: product, type: "product" })
+                            }
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                          >
+                            <Plus className="size-4" />
+                            Sumar stock
+                          </Button>
+                        ) : null}
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
@@ -13073,14 +13083,18 @@ function StockView({
                             >
                               Editar producto
                             </DropdownMenuItem>
-                            <DropdownMenuSeparator className="bg-white/10" />
-                            <DropdownMenuItem
-                              className="cursor-pointer text-rose-100 focus:bg-rose-300/10 focus:text-rose-100"
-                              onClick={() => deleteProduct(product)}
-                            >
-                              <Trash2 className="size-4" />
-                              Eliminar producto
-                            </DropdownMenuItem>
+                            {canManageStock ? (
+                              <>
+                                <DropdownMenuSeparator className="bg-white/10" />
+                                <DropdownMenuItem
+                                  className="cursor-pointer text-rose-100 focus:bg-rose-300/10 focus:text-rose-100"
+                                  onClick={() => deleteProduct(product)}
+                                >
+                                  <Trash2 className="size-4" />
+                                  Eliminar producto
+                                </DropdownMenuItem>
+                              </>
+                            ) : null}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
@@ -13206,7 +13220,7 @@ function StockView({
         </StockFormModal>
       )}
 
-      {canManageStock && isCreatingProduct && (
+      {canManageCatalog && isCreatingProduct && (
         <StockFormModal
           icon={Package}
           onClose={closeProductForm}
@@ -13240,7 +13254,7 @@ function StockView({
         </StockFormModal>
       )}
 
-      {canManageStock && editingId && (
+      {canManageCatalog && editingId && (
         <StockFormModal
           icon={Package}
           onClose={closeEditProductModal}
@@ -13271,7 +13285,7 @@ function StockView({
         </StockFormModal>
       )}
 
-      {canManageStock && isCreatingFlavor && (
+      {canManageCatalog && isCreatingFlavor && (
         <StockFormModal
           icon={Snowflake}
           onClose={closeFlavorForm}
@@ -13309,7 +13323,7 @@ function StockView({
         </StockFormModal>
       )}
 
-      {canManageStock && editingFlavor && (
+      {canManageCatalog && editingFlavor && (
         <StockFormModal
           icon={Snowflake}
           onClose={closeEditFlavorModal}

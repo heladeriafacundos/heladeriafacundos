@@ -79,7 +79,7 @@ const ensureBucket = async (supabase: ReturnType<typeof createAdminClient>) => {
 
 export async function POST(request: Request) {
   try {
-    const permission = await requireRoles(["admin", "dueno"]);
+    const permission = await requireRoles(["admin", "dueno", "empleado"]);
     if (!permission.ok) return permission.response;
 
     const formData = await request.formData();

@@ -1,6 +1,6 @@
 {
   "name": "caja-heladeria",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "Caja de escritorio para heladeria con modo offline",
   "author": {
     "name": "cph.dev"

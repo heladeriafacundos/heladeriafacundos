@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function POST(request: Request) {
   try {
-    const permission = await requireRoles(["admin", "dueno"]);
+    const permission = await requireRoles(["admin", "dueno", "empleado"]);
     if (!permission.ok) return permission.response;
 
     const body = (await request.json()) as {

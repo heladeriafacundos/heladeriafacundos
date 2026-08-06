@@ -19,8 +19,14 @@ export async function GET() {
     const canSeeManagementData =
       permission.user.role === "admin" || permission.user.role === "dueno";
     const productSelect = canSeeManagementData
+      ? "id,nombre,categoria,descripcion,precio,precio_pendiente,costo,stock,stock_minimo,controla_stock,unidad,imagen,icono,max_gustos,consumo_gustos"
+      : "id,nombre,categoria,descripcion,precio,precio_pendiente,stock,stock_minimo,controla_stock,unidad,imagen,icono,max_gustos,consumo_gustos";
+    const compatibleProductSelect = canSeeManagementData
       ? "id,nombre,categoria,precio,costo,stock,stock_minimo,unidad,imagen,icono,max_gustos,consumo_gustos"
       : "id,nombre,categoria,precio,stock,stock_minimo,unidad,imagen,icono,max_gustos,consumo_gustos";
+    const legacyProductSelect = canSeeManagementData
+      ? "id,nombre,categoria,precio,costo,stock,stock_minimo,unidad,imagen,max_gustos,consumo_gustos"
+      : "id,nombre,categoria,precio,stock,stock_minimo,unidad,imagen,max_gustos,consumo_gustos";
     const paymentMethodSelect = canSeeManagementData
       ? "nombre,comision"
       : "nombre";
@@ -45,11 +51,12 @@ export async function GET() {
       asistencias,
       diseno,
       comisionesCanales,
+      jerarquiaCategorias,
       auditoria,
     ] = await Promise.all([
       supabase
         .from("categorias")
-        .select("nombre,icono")
+        .select("nombre,icono,categoria_padre")
         .order("orden", { ascending: true })
         .order("nombre", { ascending: true }),
       supabase
@@ -127,6 +134,11 @@ export async function GET() {
             .eq("clave", "comisiones_canales")
             .maybeSingle()
         : emptyConfig,
+      supabase
+        .from("configuracion")
+        .select("valor")
+        .eq("clave", "categorias_jerarquia")
+        .maybeSingle(),
       canSeeManagementData
         ? supabase
             .from("auditoria")
@@ -136,30 +148,47 @@ export async function GET() {
         : emptyRows,
     ]);
 
-    const categorias =
+    const categoriasCompatibles =
       categoriasConIcono.error?.code === "42703" ||
       categoriasConIcono.error?.code === "PGRST204"
+        ? await supabase
+            .from("categorias")
+            .select("nombre,icono")
+            .order("orden", { ascending: true })
+            .order("nombre", { ascending: true })
+        : categoriasConIcono;
+
+    const categorias =
+      categoriasCompatibles.error?.code === "42703" ||
+      categoriasCompatibles.error?.code === "PGRST204"
         ? await supabase
             .from("categorias")
             .select("nombre")
             .order("orden", { ascending: true })
             .order("nombre", { ascending: true })
-        : categoriasConIcono;
+        : categoriasCompatibles;
 
-    const productos =
+    const productosCompatibles =
       productosConIcono.error?.code === "42703" ||
       productosConIcono.error?.code === "PGRST204"
         ? await supabase
             .from("productos")
-            .select(
-              canSeeManagementData
-                ? "id,nombre,categoria,precio,costo,stock,stock_minimo,unidad,imagen,max_gustos,consumo_gustos"
-                : "id,nombre,categoria,precio,stock,stock_minimo,unidad,imagen,max_gustos,consumo_gustos",
-            )
+            .select(compatibleProductSelect)
             .eq("activo", true)
             .order("categoria", { ascending: true })
             .order("nombre", { ascending: true })
         : productosConIcono;
+
+    const productos =
+      productosCompatibles.error?.code === "42703" ||
+      productosCompatibles.error?.code === "PGRST204"
+        ? await supabase
+            .from("productos")
+            .select(legacyProductSelect)
+            .eq("activo", true)
+            .order("categoria", { ascending: true })
+            .order("nombre", { ascending: true })
+        : productosCompatibles;
 
     const gustos =
       gustosConStock.error?.code === "42703" ||
@@ -220,6 +249,11 @@ export async function GET() {
       auditoria.error?.code === "42P01" || auditoria.error?.code === "PGRST205"
         ? null
         : auditoria.error;
+    const jerarquiaCategoriasError =
+      jerarquiaCategorias.error?.code === "42P01" ||
+      jerarquiaCategorias.error?.code === "PGRST205"
+        ? null
+        : jerarquiaCategorias.error;
 
     const error =
       categorias.error ||
@@ -234,6 +268,7 @@ export async function GET() {
       tandasError ||
       disenoError ||
       comisionesError ||
+      jerarquiaCategoriasError ||
       auditoriaError ||
       empleados.error ||
       asistencias.error;
@@ -244,7 +279,17 @@ export async function GET() {
 
     return NextResponse.json({
       projectRef,
-      categorias: categorias.data ?? [],
+      categorias: (categorias.data ?? []).map((categoria) => ({
+        ...categoria,
+        categoria_padre:
+          "categoria_padre" in categoria && categoria.categoria_padre
+            ? categoria.categoria_padre
+            : String(
+                (jerarquiaCategorias.data?.valor as Record<string, unknown> | null)?.[
+                  categoria.nombre
+                ] ?? "",
+              ) || null,
+      })),
       productos: productos.data ?? [],
       gustos: gustosCompat.data ?? [],
       metodos_pago: metodosPago.data ?? [],

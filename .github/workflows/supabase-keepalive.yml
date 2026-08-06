@@ -1,0 +1,99 @@
+name: Mantener Supabase activo
+
+on:
+  schedule:
+    - cron: "17 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: supabase-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    name: Generar actividad en la base
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Actualizar latido y consultar tablas
+        shell: bash
+        run: |
+          node <<'NODE'
+          const baseUrl = process.env.SUPABASE_URL;
+          const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+          if (!baseUrl || !serviceRoleKey) {
+            throw new Error("Faltan los secretos de Supabase");
+          }
+
+          const headers = {
+            apikey: serviceRoleKey,
+            Authorization: `Bearer ${serviceRoleKey}`,
+            "Content-Type": "application/json",
+          };
+          const executedAt = new Date().toISOString();
+
+          const heartbeat = await fetch(
+            `${baseUrl}/rest/v1/configuracion?on_conflict=clave`,
+            {
+              method: "POST",
+              headers: {
+                ...headers,
+                Prefer: "resolution=merge-duplicates,return=minimal",
+              },
+              body: JSON.stringify({
+                clave: "keepalive",
+                valor: {
+                  ejecutado: executedAt,
+                  origen: "github-actions",
+                },
+              }),
+            },
+          );
+
+          if (!heartbeat.ok) {
+            throw new Error(`Falló el latido: HTTP ${heartbeat.status}`);
+          }
+
+          for (const table of ["productos", "categorias", "ventas"]) {
+            const response = await fetch(
+              `${baseUrl}/rest/v1/${table}?select=*&limit=1`,
+              { headers },
+            );
+
+            if (!response.ok) {
+              throw new Error(`Falló la consulta de ${table}: HTTP ${response.status}`);
+            }
+          }
+
+          console.log(`Keepalive completado: ${executedAt}`);
+          NODE
+
+  mantener-workflow-activo:
+    name: Evitar desactivación por inactividad
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Registrar actividad mensual
+        shell: bash
+        run: |
+          if [ "$(date -u +%d)" != "01" ]; then
+            exit 0
+          fi
+
+          date -u +%Y-%m-%dT%H:%M:%SZ > .github/keepalive-last-activity.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive-last-activity.txt
+          git commit -m "chore: mantener automatización activa [skip ci]"
+          git push

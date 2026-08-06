@@ -207,16 +207,20 @@ type DeleteConfirmation = {
 type CategoryOption = {
   icon: string;
   name: string;
+  parent: string;
 };
 
 type Product = {
   id: string;
   name: string;
   category: string;
+  description: string;
   price: number;
+  pricePending: boolean;
   cost: number;
   stock: number;
   minStock: number;
+  trackStock: boolean;
   unit: string;
   imageUrl: string;
   icon: string;
@@ -226,6 +230,7 @@ type Product = {
 
 type ProductForm = Product & {
   categoryIcon: string;
+  categoryParent: string;
 };
 
 type IceCreamFlavor = {
@@ -444,10 +449,13 @@ type ProductRow = {
   id: string;
   nombre: string;
   categoria: string;
+  descripcion?: string | null;
   precio: NumericValue;
+  precio_pendiente?: boolean | null;
   costo?: NumericValue;
   stock: NumericValue;
   stock_minimo: NumericValue;
+  controla_stock?: boolean | null;
   unidad: string;
   imagen: string | null;
   icono?: string | null;
@@ -458,6 +466,7 @@ type ProductRow = {
 type CategoryRow = {
   nombre: string;
   icono?: string | null;
+  categoria_padre?: string | null;
 };
 
 type FlavorRow = {
@@ -2882,6 +2891,70 @@ const createAutomaticId = (
 const getFlavorCategoryName = (category?: string | null) =>
   category?.trim() || "Sin categoría";
 
+const menuCategoryOrder = [
+  "cafes",
+  "meriendas / desayunos",
+  "promo",
+  "salados",
+  "dulces",
+  "aperitivos",
+  "extras",
+];
+const MENU_PARENT_CATEGORY = "Cafetería";
+const DIRECT_CATEGORY_PREFIX = "__direct_category__:";
+const builtInCategoryParents: Record<string, string> = {
+  cucuruchos: "Heladería",
+  potes: "Heladería",
+  vasos: "Heladería",
+};
+const menuProductDescriptions: Record<string, string> = {
+  "cafe-facundos":
+    "Salsa de chocolate + salsa de frutilla, café, leche, crema y chocolate rallado.",
+  "cafe-frio": "Incluye una bocha de helado de chocolate o americana.",
+  "cafe-helado": "Café con hielo; leche opcional.",
+  "cafe-te-helado": "Té con hielo; leche opcional.",
+  "dulce-brocheta-panqueques":
+    "Con dulce de leche, Nutella o crema y frutas de estación.",
+  "dulce-tortilla-avena": "Con fruta de estación y mix de semillas.",
+  "merienda-medialunas": "Opcional té.",
+  "merienda-proteico":
+    "Café con leche o té + exprimido de naranja, tostadas + jamón + huevos revueltos + tomates cherry.",
+  "merienda-tostadas": "Opcional té.",
+};
+
+const normalizeCategoryName = (category: string) =>
+  category
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+const compareProductCategories = (left: string, right: string) => {
+  const leftIndex = menuCategoryOrder.indexOf(normalizeCategoryName(left));
+  const rightIndex = menuCategoryOrder.indexOf(normalizeCategoryName(right));
+
+  if (leftIndex >= 0 || rightIndex >= 0) {
+    if (leftIndex < 0) return 1;
+    if (rightIndex < 0) return -1;
+    if (leftIndex !== rightIndex) return leftIndex - rightIndex;
+  }
+
+  return left.localeCompare(right, "es-AR");
+};
+
+const inferCategoryParent = (category: string) =>
+  menuCategoryOrder.includes(normalizeCategoryName(category))
+    ? MENU_PARENT_CATEGORY
+    : builtInCategoryParents[normalizeCategoryName(category)] ?? "";
+
+const createDirectCategoryId = (category: string) =>
+  `${DIRECT_CATEGORY_PREFIX}${category}`;
+
+const getDirectCategoryName = (category: string) =>
+  category.startsWith(DIRECT_CATEGORY_PREFIX)
+    ? category.slice(DIRECT_CATEGORY_PREFIX.length)
+    : "";
+
 const formatCategoryLabel = (category: string) => {
   const label = category.trim();
   const normalized = label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -2904,13 +2977,13 @@ const inferCategoryIconId = (category: string) => {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
 
-  if (normalized === "helado") return "snowflake";
-  if (normalized === "cafe") return "coffee";
-  if (normalized === "salado") return "store";
-  if (normalized === "dulce") return "receipt";
+  if (normalized.includes("helado")) return "snowflake";
+  if (normalized.includes("cafe")) return "coffee";
+  if (normalized.includes("salado")) return "store";
+  if (normalized.includes("dulce")) return "receipt";
   if (normalized === "bebida") return "card";
-  if (normalized === "aperitivo") return "wallet";
-  if (normalized === "desayuno") return "sun";
+  if (normalized.includes("aperitivo")) return "wallet";
+  if (normalized.includes("desayuno") || normalized.includes("merienda")) return "sun";
   if (normalized === "promo") return "money";
 
   return DEFAULT_CATEGORY_ICON_ID;
@@ -2931,6 +3004,15 @@ const getCategoryIconId = (
   return savedCategory?.icon ?? inferCategoryIconId(categoryName);
 };
 
+const getCategoryParent = (
+  category: string,
+  categories: CategoryOption[] = [],
+) => {
+  const categoryName = category.trim();
+  const savedCategory = categories.find((item) => item.name === categoryName);
+  return savedCategory?.parent?.trim() || inferCategoryParent(categoryName);
+};
+
 const getProductCategoryIcon = (
   category: string,
   categories: CategoryOption[] = [],
@@ -2943,17 +3025,24 @@ const buildCategoryOptions = (
 ) => {
   const options = new Map<string, CategoryOption>();
 
-  const addCategory = (name?: string | null, icon?: string | null) => {
+  const addCategory = (
+    name?: string | null,
+    icon?: string | null,
+    parent?: string | null,
+  ) => {
     const categoryName = name?.trim();
     if (!categoryName || options.has(categoryName)) return;
 
     options.set(categoryName, {
       name: categoryName,
       icon: normalizeCategoryIconId(icon ?? inferCategoryIconId(categoryName)),
+      parent: parent?.trim() || inferCategoryParent(categoryName),
     });
   };
 
-  categories.forEach((category) => addCategory(category.nombre, category.icono));
+  categories.forEach((category) =>
+    addCategory(category.nombre, category.icono, category.categoria_padre),
+  );
   products.forEach((product) => addCategory(product.categoria));
   flavors.forEach((flavor) => addCategory(getFlavorCategoryName(flavor.categoria)));
   defaultFlavorCategories.forEach((category) => addCategory(category));
@@ -3014,8 +3103,9 @@ const saleIsMorning = (sale: Sale) =>
 const saleMatchesChannelFilter = (sale: Sale, channelFilter: ChannelFilter) =>
   channelFilter === "todo" || sale.channel === channelFilter;
 
-const isProductLowStock = (product: Pick<Product, "minStock" | "stock">) =>
-  product.minStock > 0 && product.stock <= product.minStock;
+const isProductLowStock = (
+  product: Pick<Product, "minStock" | "stock" | "trackStock">,
+) => product.trackStock && product.minStock > 0 && product.stock <= product.minStock;
 
 const isManualFlavorBatch = (batch: Pick<FlavorBatch, "portionsLoaded">) =>
   batch.portionsLoaded <= 1;
@@ -3185,10 +3275,16 @@ const mapProduct = (product: ProductRow): Product => ({
   id: product.id,
   name: product.nombre,
   category: product.categoria,
+  description:
+    product.descripcion?.trim() || menuProductDescriptions[product.id] || "",
   price: toNumber(product.precio),
+  pricePending:
+    product.precio_pendiente ?? product.unidad === "venta-pendiente",
   cost: toNumber(product.costo ?? 0),
   stock: toNumber(product.stock),
   minStock: toNumber(product.stock_minimo),
+  trackStock:
+    product.controla_stock ?? !product.unidad.startsWith("venta"),
   unit: product.unidad,
   imageUrl: normalizeProductImageUrl(product.imagen),
   icon: normalizeCategoryIconId(product.icono),
@@ -3577,19 +3673,33 @@ export function GestionLocalErp() {
     appliedOfflineSaleIdsRef.current = new Set(
       (snapshot.sales ?? []).map((sale) => sale.id),
     );
-    setProducts(snapshot.products ?? []);
+    setProducts(
+      (snapshot.products ?? []).map((product) => ({
+        ...product,
+        description: product.description ?? "",
+        pricePending: product.pricePending ?? false,
+        trackStock: product.trackStock ?? true,
+      })),
+    );
     setCategoryOptions(
-      snapshot.categoryOptions ??
-        buildCategoryOptions(
+      snapshot.categoryOptions
+        ? snapshot.categoryOptions.map((category) => ({
+            ...category,
+            parent: category.parent ?? inferCategoryParent(category.name),
+          }))
+        : buildCategoryOptions(
           [],
           (snapshot.products ?? []).map((product) => ({
             id: product.id,
             nombre: product.name,
             categoria: product.category,
+            descripcion: product.description,
             precio: product.price,
+            precio_pendiente: product.pricePending,
             costo: product.cost,
             stock: product.stock,
             stock_minimo: product.minStock,
+            controla_stock: product.trackStock,
             unidad: product.unit,
             imagen: product.imageUrl,
             icono: product.icon,
@@ -4063,7 +4173,9 @@ export function GestionLocalErp() {
     });
   };
 
-  const persistProductInCache = (product: Product & { categoryIcon?: string }) => {
+  const persistProductInCache = (
+    product: Product & { categoryIcon?: string; categoryParent?: string },
+  ) => {
     const productCategoryIcon = normalizeCategoryIconId(
       product.categoryIcon ?? getCategoryIconId(product.category, categoryOptions),
     );
@@ -4071,10 +4183,13 @@ export function GestionLocalErp() {
       id: product.id,
       nombre: product.name,
       categoria: product.category,
+      descripcion: product.description,
       precio: product.price,
+      precio_pendiente: product.pricePending,
       costo: product.cost,
       stock: product.stock,
       stock_minimo: product.minStock,
+      controla_stock: product.trackStock,
       unidad: product.unit,
       imagen: product.imageUrl.trim() || null,
       icono: product.icon,
@@ -4087,12 +4202,17 @@ export function GestionLocalErp() {
       categorias: (data.categorias ?? []).some((item) => item.nombre === product.category)
         ? (data.categorias ?? []).map((item) =>
             item.nombre === product.category
-              ? { ...item, icono: productCategoryIcon }
+              ? {
+                  ...item,
+                  categoria_padre: product.categoryParent?.trim() || null,
+                  icono: productCategoryIcon,
+                }
               : item,
           )
         : [
             {
               nombre: product.category,
+              categoria_padre: product.categoryParent?.trim() || null,
               icono: productCategoryIcon,
             },
             ...(data.categorias ?? []),
@@ -4162,9 +4282,14 @@ export function GestionLocalErp() {
       const deletedItems = (data.items_venta ?? []).filter(
         (item) => item.venta_id === saleId,
       );
+      const trackedProductIds = new Set(
+        (data.productos ?? [])
+          .filter((product) => product.controla_stock ?? true)
+          .map((product) => product.id),
+      );
       const productQuantities = deletedItems.reduce<Map<string, number>>(
         (acc, item) => {
-          if (!item.producto_id) return acc;
+          if (!item.producto_id || !trackedProductIds.has(item.producto_id)) return acc;
           acc.set(
             item.producto_id,
             (acc.get(item.producto_id) ?? 0) + toNumber(item.cantidad),
@@ -4466,18 +4591,28 @@ export function GestionLocalErp() {
   }, [activeView, allowedViews]);
 
   const cartItems = cart;
-  const categories = ["Todos", ...new Set(products.map((product) => product.category))];
+  const categories = [
+    "Todos",
+    ...[...new Set(products.map((product) => product.category))].sort(
+      compareProductCategories,
+    ),
+  ];
 
   const filteredProducts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
+    const directCategory = getDirectCategoryName(category);
 
     return products.filter((product) => {
       const matchesCategory =
-        category === "Todos" || product.category === category;
+        category === "Todos" ||
+        (directCategory
+          ? product.category === directCategory
+          : product.category === category ||
+            getCategoryParent(product.category, categoryOptions) === category);
       const matchesQuery = product.name.toLowerCase().includes(normalizedQuery);
       return matchesCategory && matchesQuery;
     });
-  }, [category, products, query]);
+  }, [category, categoryOptions, products, query]);
 
   const saleSubtotal = cartItems.reduce(
     (total, item) => total + item.price * item.quantity,
@@ -4498,7 +4633,10 @@ export function GestionLocalErp() {
     commissionHistory,
   );
   const lowStock = products.filter(isProductLowStock);
-  const unitsInStock = products.reduce((total, product) => total + product.stock, 0);
+  const unitsInStock = products.reduce(
+    (total, product) => total + (product.trackStock ? product.stock : 0),
+    0,
+  );
   const attendanceStatusMap = useMemo(
     () => buildAttendanceStatusMap(staff, attendance, new Date(timeTick)),
     [attendance, staff, timeTick],
@@ -4509,8 +4647,13 @@ export function GestionLocalErp() {
       .reduce((total, item) => total + item.quantity, 0);
 
   const addLineToCart = (product: Product, flavors: string[]) => {
+    if (product.pricePending) {
+      setNotice(`${product.name} todavía no tiene un precio cargado`);
+      return;
+    }
+
     const currentQuantity = getCartQuantity(product.id);
-    if (currentQuantity >= product.stock) {
+    if (product.trackStock && currentQuantity >= product.stock) {
       setNotice(`${product.name} no tiene stock disponible`);
       return;
     }
@@ -4613,7 +4756,7 @@ export function GestionLocalErp() {
         .filter((item) => item.productId === line.productId)
         .reduce((total, item) => total + item.quantity, 0);
 
-      if (product && currentQuantity >= product.stock) {
+      if (product?.trackStock && currentQuantity >= product.stock) {
         setNotice(`${line.name} no tiene stock disponible`);
         return current;
       }
@@ -4671,6 +4814,9 @@ export function GestionLocalErp() {
       return acc;
     }, {});
     const soldEntries = Object.entries(soldQuantities);
+    const stockControlledEntries = soldEntries.filter(([productId]) =>
+      productsSnapshot.find((product) => product.id === productId)?.trackStock,
+    );
     const saleItems = cartSnapshot.map((item) => ({
       venta_id: newSale.id,
       producto_id: item.productId,
@@ -4694,7 +4840,7 @@ export function GestionLocalErp() {
       createdAt: newSale.createdAt,
     }));
 
-    const inventoryMovements = soldEntries.map(([productId, quantity]) => ({
+    const inventoryMovements = stockControlledEntries.map(([productId, quantity]) => ({
       sucursal_id: DEFAULT_BRANCH_ID,
       producto_id: productId,
       tipo: "venta",
@@ -4719,7 +4865,7 @@ export function GestionLocalErp() {
       },
       items: saleItems,
       movimientos: inventoryMovements,
-      stock: soldEntries.map(([productId, quantity]) => {
+      stock: stockControlledEntries.map(([productId, quantity]) => {
         const product = productsSnapshot.find((item) => item.id === productId);
         return {
           cantidad: quantity,
@@ -4735,7 +4881,7 @@ export function GestionLocalErp() {
       payload: salePayload,
       sale: newSale,
       saleItems: localSaleItems,
-      productAdjustments: soldEntries.map(([id, quantity]) => ({ id, quantity })),
+      productAdjustments: stockControlledEntries.map(([id, quantity]) => ({ id, quantity })),
       flavorAdjustments: [],
     };
 
@@ -4799,10 +4945,14 @@ export function GestionLocalErp() {
         nombre: product.name.trim(),
         categoria: product.category.trim(),
         categoria_icono: normalizeCategoryIconId(product.categoryIcon),
+        categoria_padre: product.categoryParent.trim(),
+        descripcion: product.description.trim(),
         precio: product.price,
+        precio_pendiente: product.pricePending,
         costo: product.cost,
         stock: product.stock,
         stock_minimo: product.minStock,
+        controla_stock: product.trackStock,
         unidad: product.unit.trim() || "unid.",
         imagen: product.imageUrl.trim() || null,
         icono: normalizeCategoryIconId(product.icon),
@@ -4823,6 +4973,7 @@ export function GestionLocalErp() {
         const localCategory: CategoryOption = {
           name: product.category.trim(),
           icon: normalizeCategoryIconId(product.categoryIcon),
+          parent: product.categoryParent.trim(),
         };
         setProducts((current) =>
           current.some((item) => item.id === id)
@@ -4841,6 +4992,7 @@ export function GestionLocalErp() {
         persistProductInCache({
           ...localProduct,
           categoryIcon: product.categoryIcon,
+          categoryParent: product.categoryParent,
         });
         return true;
       }
@@ -5018,6 +5170,7 @@ export function GestionLocalErp() {
         const localCategory: CategoryOption = {
           name: categoryName,
           icon: normalizeCategoryIconId(flavor.categoryIcon),
+          parent: "",
         };
         const localFlavor: IceCreamFlavor = {
           ...flavor,
@@ -5099,7 +5252,7 @@ export function GestionLocalErp() {
           .filter((item) => item.productId === product.id)
           .reduce((total, item) => total + item.quantity, 0);
 
-        return restoredQuantity > 0
+        return product.trackStock && restoredQuantity > 0
           ? { ...product, stock: product.stock + restoredQuantity }
           : product;
       }),
@@ -6667,6 +6820,8 @@ function CajaView({
   const [flavorSearch, setFlavorSearch] = useState("");
   const lowFlavorStock: IceCreamFlavor[] = [];
   const categorySelected = category !== "Todos";
+  const directCategory = getDirectCategoryName(category);
+  const selectedCategoryName = directCategory || category;
   const cartQuantityByProduct = cartItems.reduce<Record<string, number>>(
     (acc, item) => {
       acc[item.productId] = (acc[item.productId] ?? 0) + item.quantity;
@@ -6689,12 +6844,48 @@ function CajaView({
     : filteredProducts;
   const displayedLowFlavors: IceCreamFlavor[] = [];
   const visibleCount = displayedProducts.length;
-  const showCategoryBrowser = !categorySelected && !showLowStockOnly;
-  const categoryCards = realCategories.map((item) => ({
+  const folderNames = [
+    ...new Set(
+      realCategories
+        .map((item) => getCategoryParent(item, categoryOptions))
+        .filter(Boolean),
+    ),
+  ];
+  const childCategories = realCategories.filter(
+    (item) => getCategoryParent(item, categoryOptions) === category,
+  );
+  const rootCategories = [
+    ...folderNames,
+    ...realCategories.filter(
+      (item) => !getCategoryParent(item, categoryOptions) && !folderNames.includes(item),
+    ),
+  ];
+  const showCategoryBrowser =
+    !showLowStockOnly && (!categorySelected || childCategories.length > 0);
+  const browsedCategories = categorySelected ? childCategories : rootCategories;
+  const directProductsInSelectedFolder = categorySelected
+    ? filteredProducts.filter((product) => product.category === category)
+    : [];
+  const categoryCards = browsedCategories.map((item) => ({
       id: item,
       label: formatCategoryLabel(item),
       icon: getProductCategoryIcon(item, categoryOptions),
+      isFolder: folderNames.includes(item),
+      productCount: filteredProducts.filter(
+        (product) =>
+          product.category === item ||
+          getCategoryParent(product.category, categoryOptions) === item,
+      ).length,
     }));
+  if (childCategories.length > 0 && directProductsInSelectedFolder.length > 0) {
+    categoryCards.unshift({
+      id: createDirectCategoryId(category),
+      label: "Productos de esta carpeta",
+      icon: getProductCategoryIcon(category, categoryOptions),
+      isFolder: false,
+      productCount: directProductsInSelectedFolder.length,
+    });
+  }
   const channelCommissionRate = channelCommissions[saleChannel] ?? 0;
   const paymentCommissionRate = paymentMethodCommissions[paymentMethod] ?? 0;
   const totalCommissionRate = channelCommissionRate + paymentCommissionRate;
@@ -6742,11 +6933,32 @@ function CajaView({
 
         {showCategoryBrowser ? (
           <div className="space-y-4 p-4">
-            <div>
-              <p className="font-semibold text-zinc-100">Categorías</p>
+            <div className="flex items-center gap-3 border-b border-white/10 pb-4">
+              {categorySelected ? (
+                <Button
+                  className="border-white/10 bg-white/5 text-zinc-100 hover:bg-white/10"
+                  onClick={() => {
+                    setCategory("Todos");
+                    setQuery("");
+                  }}
+                  type="button"
+                  variant="outline"
+                >
+                  <ArrowLeft className="size-4" />
+                  Volver
+                </Button>
+              ) : null}
+              <div>
+                <p className="font-semibold text-zinc-100">
+                  {categorySelected ? formatCategoryLabel(category) : "Categorías"}
+                </p>
+                <p className="mt-1 text-sm text-zinc-500">
+                  {categorySelected ? "Elegí una subcarpeta" : "Elegí una carpeta"}
+                </p>
+              </div>
             </div>
 
-            {lowStock.length > 0 && (
+            {!categorySelected && lowStock.length > 0 && (
               <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
@@ -6797,6 +7009,14 @@ function CajaView({
                 </div>
                 <div>
                   <p className="text-base font-semibold">{item.label}</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {item.productCount} producto{item.productCount === 1 ? "" : "s"}
+                  </p>
+                  {item.isFolder ? (
+                    <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-200/70">
+                      Carpeta
+                    </p>
+                  ) : null}
                 </div>
               </button>
             )})}
@@ -6814,7 +7034,11 @@ function CajaView({
                         if (showLowStockOnly) {
                           setShowLowStockOnly(false);
                         }
-                        setCategory("Todos");
+                        setCategory(
+                          directCategory ||
+                            getCategoryParent(category, categoryOptions) ||
+                            "Todos",
+                        );
                         setQuery("");
                       }}
                       type="button"
@@ -6826,7 +7050,11 @@ function CajaView({
                   </div>
                   <div className="min-w-0">
                     <p className="truncate font-semibold text-zinc-100">
-                      {showLowStockOnly && !categorySelected ? "Bajo stock" : formatCategoryLabel(category)}
+                      {showLowStockOnly && !categorySelected
+                        ? "Bajo stock"
+                        : directCategory
+                          ? `Productos de ${formatCategoryLabel(directCategory)}`
+                          : formatCategoryLabel(category)}
                     </p>
                     <p className="text-sm text-zinc-500">
                       {showLowStockOnly && lowStockView === "gustos"
@@ -6845,7 +7073,7 @@ function CajaView({
                       placeholder={
                         showLowStockOnly && !categorySelected
                           ? "Buscar faltantes"
-                          : `Buscar en ${category.toLowerCase()}`
+                          : `Buscar en ${formatCategoryLabel(selectedCategoryName).toLowerCase()}`
                       }
                       value={query}
                     />
@@ -6912,8 +7140,10 @@ function CajaView({
               <div className="erp-product-grid grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
                 {displayedProducts.map((product) => {
                 const quantityInCart = cartQuantityByProduct[product.id] ?? 0;
-                const reachedLimit = quantityInCart >= product.stock;
-                const unavailable = product.stock <= 0 || reachedLimit;
+                const reachedLimit = product.trackStock && quantityInCart >= product.stock;
+                const unavailable =
+                  product.pricePending ||
+                  (product.trackStock && (product.stock <= 0 || reachedLimit));
                 const isLow = isProductLowStock(product);
                 const ProductIcon = getCategoryIconOption(product.icon).icon;
 
@@ -6921,8 +7151,10 @@ function CajaView({
                   <button
                     className={cn(
                       "erp-product-card group overflow-hidden rounded-lg border text-left transition disabled:cursor-not-allowed",
-                      unavailable
-                        ? "border-white/5 bg-zinc-900/70 opacity-45 grayscale"
+                      product.pricePending
+                        ? "border-amber-300/25 bg-[#191512] opacity-75"
+                        : unavailable
+                          ? "border-white/5 bg-zinc-900/70 opacity-45 grayscale"
                         : isLow
                           ? "border-amber-300/40 bg-[#191512] hover:-translate-y-0.5 hover:border-amber-300/60"
                         : "border-white/10 bg-[#121516] hover:-translate-y-0.5 hover:border-cyan-300/50 hover:bg-[#161b1c]",
@@ -6952,6 +7184,8 @@ function CajaView({
                         <Badge className="border-white/10 bg-black/50 text-zinc-100 hover:bg-black/50">
                           {reachedLimit
                             ? "Límite en carrito"
+                            : product.pricePending
+                              ? "Precio pendiente"
                             : isLow
                               ? "Bajo stock"
                               : product.category}
@@ -6962,12 +7196,21 @@ function CajaView({
                       <p className="min-h-10 font-semibold leading-snug text-zinc-100">
                         {product.name}
                       </p>
+                      {product.description ? (
+                        <p className="mt-1 line-clamp-2 min-h-8 text-xs leading-4 text-zinc-500">
+                          {product.description}
+                        </p>
+                      ) : null}
                       <div className="mt-3 flex items-end justify-between gap-3">
                         <p className="text-lg font-semibold text-cyan-100">
-                          {formatCurrency(product.price)}
+                          {product.pricePending ? "Sin precio" : formatCurrency(product.price)}
                         </p>
                         <p className={cn("text-xs", isLow ? "text-amber-200" : "text-zinc-500")}>
-                          {quantityInCart}/{product.stock} {product.unit}
+                          {product.trackStock
+                            ? `${quantityInCart}/${product.stock} ${product.unit}`
+                            : quantityInCart > 0
+                              ? `${quantityInCart} en pedido`
+                              : "Venta libre"}
                         </p>
                       </div>
                     </div>
@@ -12335,10 +12578,14 @@ function StockView({
     name: "",
     category: "General",
     categoryIcon: DEFAULT_CATEGORY_ICON_ID,
+    categoryParent: "",
+    description: "",
     price: 0,
+    pricePending: false,
     cost: 0,
     stock: 0,
     minStock: 0,
+    trackStock: true,
     unit: "unid.",
     imageUrl: "",
     icon: DEFAULT_CATEGORY_ICON_ID,
@@ -12422,6 +12669,7 @@ function StockView({
   ];
   const productFormCategoryOptions = buildCategoryOptions(
     categoryOptions.map((category) => ({
+      categoria_padre: category.parent,
       icono: category.icon,
       nombre: category.name,
     })),
@@ -12429,10 +12677,13 @@ function StockView({
       id: product.id,
       nombre: product.name,
       categoria: product.category,
+      descripcion: product.description,
       precio: product.price,
+      precio_pendiente: product.pricePending,
       costo: product.cost,
       stock: product.stock,
       stock_minimo: product.minStock,
+      controla_stock: product.trackStock,
       unidad: product.unit,
       imagen: product.imageUrl,
       icono: product.icon,
@@ -12442,6 +12693,7 @@ function StockView({
   );
   const flavorCategoryOptions = buildCategoryOptions(
     categoryOptions.map((category) => ({
+      categoria_padre: category.parent,
       icono: category.icon,
       nombre: category.name,
     })),
@@ -12527,6 +12779,7 @@ function StockView({
     setEditingProduct({
       ...product,
       categoryIcon: getCategoryIconId(product.category, categoryOptions),
+      categoryParent: getCategoryParent(product.category, categoryOptions),
     });
   };
   const closeEditProductModal = () => {
@@ -12625,6 +12878,10 @@ function StockView({
             {
               ...quickStockTarget.item,
               categoryIcon: getCategoryIconId(
+                quickStockTarget.item.category,
+                categoryOptions,
+              ),
+              categoryParent: getCategoryParent(
                 quickStockTarget.item.category,
                 categoryOptions,
               ),
@@ -13063,8 +13320,13 @@ function StockView({
                               </Badge>
                             </div>
                             <p className="mt-1 text-sm text-zinc-500">
-                              {formatCurrency(product.price)}
+                              {product.pricePending ? "Precio pendiente" : formatCurrency(product.price)}
                             </p>
+                            {product.description ? (
+                              <p className="mt-1 line-clamp-2 text-xs text-zinc-500">
+                                {product.description}
+                              </p>
+                            ) : null}
                           </div>
                         </div>
                         <Badge
@@ -13075,7 +13337,11 @@ function StockView({
                             "hover:bg-inherit",
                           )}
                         >
-                          {isLow ? "Reponer" : "Disponible"}
+                          {product.pricePending
+                            ? "Sin precio"
+                            : isLow
+                              ? "Reponer"
+                              : "Disponible"}
                         </Badge>
                       </div>
 
@@ -13083,13 +13349,17 @@ function StockView({
                         <div className="rounded-lg border border-white/10 bg-black/20 p-3">
                           <p className="text-xs uppercase text-zinc-500">Stock</p>
                           <p className="mt-1 font-semibold text-zinc-100">
-                            {product.stock} {product.unit}
+                            {product.trackStock
+                              ? `${product.stock} ${product.unit}`
+                              : "Sin control"}
                           </p>
                         </div>
                         <div className="rounded-lg border border-white/10 bg-black/20 p-3">
                           <p className="text-xs uppercase text-zinc-500">Mínimo</p>
                           <p className="mt-1 font-semibold text-zinc-100">
-                            {product.minStock} {product.unit}
+                            {product.trackStock
+                              ? `${product.minStock} ${product.unit}`
+                              : "No aplica"}
                           </p>
                         </div>
                         {canManageStock && (
@@ -13103,7 +13373,7 @@ function StockView({
                       </div>
 
                       <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
-                        {canManageStock ? (
+                        {canManageStock && product.trackStock ? (
                           <Button
                             className="w-full border-emerald-300/30 bg-emerald-300/10 text-emerald-100 hover:bg-emerald-300/20 sm:w-auto"
                             onClick={() =>
@@ -13635,18 +13905,77 @@ function ProductFields({
           placeholder="Ej: 1/4 kg helado"
           value={product.name}
         />
-        <ProductCategoryField
+        <ProductLocationField
           categories={categoryOptions}
           iconValue={product.categoryIcon}
           onChange={(value) => setProduct((current) => ({ ...current, category: value }))}
           onIconChange={(value) =>
             setProduct((current) => ({ ...current, categoryIcon: value }))
           }
+          onParentChange={(value) =>
+            setProduct((current) => ({ ...current, categoryParent: value }))
+          }
+          parentValue={product.categoryParent}
           value={product.category}
         />
       </div>
 
-      <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <label className="block min-w-0 text-xs font-semibold text-zinc-500">
+        Detalle para mostrar en caja
+        <textarea
+          className="mt-1 min-h-20 w-full resize-y rounded-lg border border-white/10 bg-[#080a0c] px-3 py-2 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-cyan-300/60"
+          onChange={(event) =>
+            setProduct((current) => ({ ...current, description: event.target.value }))
+          }
+          placeholder="Ingredientes, opciones o aclaraciones del producto"
+          value={product.description}
+        />
+      </label>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <button
+          className={cn(
+            "rounded-lg border p-3 text-left transition",
+            product.pricePending
+              ? "border-amber-300/40 bg-amber-300/10 text-amber-100"
+              : "border-white/10 bg-black/20 text-zinc-300 hover:bg-white/5",
+          )}
+          onClick={() =>
+            setProduct((current) => ({
+              ...current,
+              pricePending: !current.pricePending,
+            }))
+          }
+          type="button"
+        >
+          <p className="text-sm font-semibold">Precio pendiente</p>
+          <p className="mt-1 text-xs opacity-70">
+            Lo muestra en caja, pero no permite venderlo.
+          </p>
+        </button>
+        <button
+          className={cn(
+            "rounded-lg border p-3 text-left transition",
+            !product.trackStock
+              ? "border-cyan-300/40 bg-cyan-300/10 text-cyan-100"
+              : "border-white/10 bg-black/20 text-zinc-300 hover:bg-white/5",
+          )}
+          onClick={() =>
+            setProduct((current) => ({
+              ...current,
+              trackStock: !current.trackStock,
+            }))
+          }
+          type="button"
+        >
+          <p className="text-sm font-semibold">Venta sin control de stock</p>
+          <p className="mt-1 text-xs opacity-70">
+            Ideal para cafetería, cocina y productos preparados.
+          </p>
+        </button>
+      </div>
+
+      <div className={cn("grid min-w-0 gap-3 sm:grid-cols-2", product.trackStock && "lg:grid-cols-4")}>
         <InlineInput
           label="Precio de venta"
           onChange={(value) =>
@@ -13663,22 +13992,26 @@ function ProductFields({
           type="number"
           value={String(product.cost)}
         />
-        <InlineInput
-          label="Stock actual"
-          onChange={(value) =>
-            setProduct((current) => ({ ...current, stock: Number(value || 0) }))
-          }
-          type="number"
-          value={String(product.stock)}
-        />
-        <InlineInput
-          label="Avisar con stock"
-          onChange={(value) =>
-            setProduct((current) => ({ ...current, minStock: Number(value || 0) }))
-          }
-          type="number"
-          value={String(product.minStock)}
-        />
+        {product.trackStock ? (
+          <>
+            <InlineInput
+              label="Stock actual"
+              onChange={(value) =>
+                setProduct((current) => ({ ...current, stock: Number(value || 0) }))
+              }
+              type="number"
+              value={String(product.stock)}
+            />
+            <InlineInput
+              label="Avisar con stock"
+              onChange={(value) =>
+                setProduct((current) => ({ ...current, minStock: Number(value || 0) }))
+              }
+              type="number"
+              value={String(product.minStock)}
+            />
+          </>
+        ) : null}
       </div>
 
       <details
@@ -13830,12 +14163,203 @@ function EditFlavorFields({
   );
 }
 
+function ProductLocationField({
+  categories,
+  iconValue,
+  onChange,
+  onIconChange,
+  onParentChange,
+  parentValue,
+  value,
+}: {
+  categories: CategoryOption[];
+  iconValue: string;
+  onChange: (value: string) => void;
+  onIconChange: (value: string) => void;
+  onParentChange: (value: string) => void;
+  parentValue: string;
+  value: string;
+}) {
+  const selectedCategory = categories.find(
+    (category) => category.name === value.trim(),
+  );
+  const [creatingRoot, setCreatingRoot] = useState(
+    Boolean(value.trim() && !selectedCategory && !parentValue.trim()),
+  );
+  const [creatingSubcategory, setCreatingSubcategory] = useState(
+    Boolean(value.trim() && !selectedCategory && parentValue.trim()),
+  );
+  const rootCategories = categories
+    .filter((category) => !category.parent)
+    .sort((left, right) => left.name.localeCompare(right.name, "es-AR"));
+  const selectedRootName =
+    parentValue.trim() ||
+    (creatingRoot ? value.trim() : selectedCategory?.name ?? value.trim());
+  const selectedRoot = rootCategories.find(
+    (category) => category.name === selectedRootName,
+  );
+  const childCategories = categories
+    .filter((category) => category.parent === selectedRootName)
+    .sort((left, right) => left.name.localeCompare(right.name, "es-AR"));
+  const isCustomRoot = Boolean(
+    selectedRootName &&
+      !rootCategories.some((category) => category.name === selectedRootName),
+  );
+
+  useEffect(() => {
+    if (selectedCategory) {
+      setCreatingRoot(false);
+      setCreatingSubcategory(false);
+    }
+  }, [selectedCategory]);
+
+  return (
+    <div className="min-w-0 space-y-3">
+      <p className="text-xs font-semibold text-zinc-500">¿Dónde va a aparecer?</p>
+
+      <label className="block min-w-0 text-xs font-semibold text-zinc-500">
+        Carpeta principal
+        <select
+          className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#080a0c] px-3 text-sm font-semibold text-zinc-100 outline-none transition focus:border-cyan-300/60"
+          onChange={(event) => {
+            if (event.target.value === "__new_root__") {
+              setCreatingRoot(true);
+              setCreatingSubcategory(false);
+              onChange("");
+              onParentChange("");
+              onIconChange(DEFAULT_CATEGORY_ICON_ID);
+              return;
+            }
+
+            const category = rootCategories.find(
+              (item) => item.name === event.target.value,
+            );
+            setCreatingRoot(false);
+            setCreatingSubcategory(false);
+            onChange(category?.name ?? event.target.value);
+            onParentChange("");
+            onIconChange(category?.icon ?? DEFAULT_CATEGORY_ICON_ID);
+          }}
+          value={creatingRoot ? "__new_root__" : selectedRootName}
+        >
+          <option disabled value="">
+            Elegir carpeta
+          </option>
+          {isCustomRoot ? (
+            <option value={selectedRootName}>
+              {formatCategoryLabel(selectedRootName)} (nueva)
+            </option>
+          ) : null}
+          {rootCategories.map((category) => (
+            <option key={category.name} value={category.name}>
+              {formatCategoryLabel(category.name)}
+            </option>
+          ))}
+          <option value="__new_root__">＋ Crear carpeta nueva</option>
+        </select>
+      </label>
+
+      {creatingRoot ? (
+        <label className="block min-w-0 text-xs font-semibold text-zinc-500">
+          Nombre de la carpeta nueva
+          <input
+            autoFocus
+            className="mt-1 h-11 w-full rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-3 text-sm font-semibold text-cyan-50 outline-none transition placeholder:text-cyan-100/50 focus:border-cyan-200"
+            onChange={(event) => onChange(event.target.value)}
+            placeholder="Ej: Cafetería"
+            value={value}
+          />
+        </label>
+      ) : null}
+
+      {selectedRootName ? (
+        <label className="block min-w-0 text-xs font-semibold text-zinc-500">
+          Subcarpeta <span className="font-normal text-zinc-600">(opcional)</span>
+          <select
+            className="mt-1 h-11 w-full rounded-lg border border-white/10 bg-[#080a0c] px-3 text-sm font-semibold text-zinc-100 outline-none transition focus:border-cyan-300/60"
+            onChange={(event) => {
+              if (event.target.value === "__new_subcategory__") {
+                setCreatingRoot(false);
+                setCreatingSubcategory(true);
+                onChange("");
+                onParentChange(selectedRootName);
+                onIconChange(DEFAULT_CATEGORY_ICON_ID);
+                return;
+              }
+
+              if (event.target.value === "__direct__") {
+                setCreatingSubcategory(false);
+                onChange(selectedRootName);
+                onParentChange("");
+                onIconChange(selectedRoot?.icon ?? DEFAULT_CATEGORY_ICON_ID);
+                return;
+              }
+
+              const category = childCategories.find(
+                (item) => item.name === event.target.value,
+              );
+              setCreatingSubcategory(false);
+              onChange(category?.name ?? event.target.value);
+              onParentChange(selectedRootName);
+              onIconChange(category?.icon ?? DEFAULT_CATEGORY_ICON_ID);
+            }}
+            value={
+              creatingSubcategory
+                ? "__new_subcategory__"
+                : parentValue
+                  ? value
+                  : "__direct__"
+            }
+          >
+            <option value="__direct__">
+              Sin subcarpeta (directo en {formatCategoryLabel(selectedRootName)})
+            </option>
+            {childCategories.map((category) => (
+              <option key={category.name} value={category.name}>
+                {formatCategoryLabel(category.name)}
+              </option>
+            ))}
+            <option value="__new_subcategory__">＋ Crear subcarpeta nueva</option>
+          </select>
+        </label>
+      ) : null}
+
+      {creatingSubcategory ? (
+        <label className="block min-w-0 text-xs font-semibold text-zinc-500">
+          Nombre de la subcarpeta nueva
+          <input
+            autoFocus
+            className="mt-1 h-11 w-full rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-3 text-sm font-semibold text-cyan-50 outline-none transition placeholder:text-cyan-100/50 focus:border-cyan-200"
+            onChange={(event) => onChange(event.target.value)}
+            placeholder="Ej: Cafés"
+            value={value}
+          />
+        </label>
+      ) : null}
+
+      <IconPickerDetails
+        label={
+          value.trim()
+            ? `Icono de ${formatCategoryLabel(value)}`
+            : "Icono de la ubicación"
+        }
+        onChange={onIconChange}
+        open={creatingRoot || creatingSubcategory}
+        summary="Icono de la categoría"
+        value={iconValue}
+      />
+    </div>
+  );
+}
+
 function ProductCategoryField({
   categories,
   iconValue,
   label = "Categoría",
   onChange,
   onIconChange,
+  onParentChange,
+  parentValue = "",
   value,
 }: {
   categories: CategoryOption[];
@@ -13843,6 +14367,8 @@ function ProductCategoryField({
   label?: string;
   onChange: (value: string) => void;
   onIconChange: (value: string) => void;
+  onParentChange?: (value: string) => void;
+  parentValue?: string;
   value: string;
 }) {
   const selectedExistingCategory = categories.find((category) => category.name === value.trim());
@@ -13872,6 +14398,7 @@ function ProductCategoryField({
               setIsCreatingCategory(true);
               onChange("");
               onIconChange(DEFAULT_CATEGORY_ICON_ID);
+              onParentChange?.("");
               return;
             }
 
@@ -13879,6 +14406,7 @@ function ProductCategoryField({
             setIsCreatingCategory(false);
             onChange(nextCategory?.name ?? event.target.value);
             onIconChange(nextCategory?.icon ?? inferCategoryIconId(event.target.value));
+            onParentChange?.(nextCategory?.parent ?? "");
           }}
           value={selectedExistingCategory?.name ?? (showNewCategoryInput ? "__new__" : "")}
         >
@@ -13901,6 +14429,29 @@ function ProductCategoryField({
           placeholder="Nombre de la nueva categoría"
           value={selectedExistingCategory ? "" : value}
         />
+      ) : null}
+
+      {onParentChange ? (
+        <label className="mt-3 block min-w-0 text-xs font-semibold text-zinc-500">
+          Carpeta principal
+          <select
+            className="mt-1 h-10 w-full rounded-lg border border-white/10 bg-[#080a0c] px-3 text-sm font-semibold text-zinc-100 outline-none transition focus:border-cyan-300/60"
+            onChange={(event) => onParentChange(event.target.value)}
+            value={parentValue}
+          >
+            <option value="">Sin carpeta principal</option>
+            {categories
+              .filter((category) => !category.parent && category.name !== value.trim())
+              .map((category) => (
+                <option key={category.name} value={category.name}>
+                  {formatCategoryLabel(category.name)}
+                </option>
+              ))}
+          </select>
+          <p className="mt-1 text-xs font-normal text-zinc-500">
+            Ejemplo: Cafetería como carpeta y Cafés como subcarpeta.
+          </p>
+        </label>
       ) : null}
 
       {showIconPicker ? (

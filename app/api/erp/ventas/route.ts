@@ -56,12 +56,23 @@ export async function POST(request: Request) {
           .filter(Boolean),
       ),
     ];
-    const productsForItems = productIds.length
+    const productsWithPolicy = productIds.length
       ? await supabase
           .from("productos")
-          .select("id,costo")
+          .select("id,costo,controla_stock,precio_pendiente")
           .in("id", productIds)
       : { data: [], error: null };
+
+    const productsForItems =
+      productsWithPolicy.error?.code === "42703" ||
+      productsWithPolicy.error?.code === "PGRST204"
+        ? productIds.length
+        ? await supabase
+            .from("productos")
+            .select("id,costo,unidad")
+            .in("id", productIds)
+          : { data: [], error: null }
+        : productsWithPolicy;
 
     if (productsForItems.error) {
       return NextResponse.json(
@@ -76,6 +87,26 @@ export async function POST(request: Request) {
         toNumber(product.costo),
       ]),
     );
+    const productTracksStock = new Map(
+      (productsForItems.data ?? []).map((product) => [
+        String(product.id),
+        "controla_stock" in product
+          ? product.controla_stock ?? true
+          : !("unidad" in product && String(product.unidad).startsWith("venta")),
+      ]),
+    );
+    const pendingPriceProduct = (productsForItems.data ?? []).find(
+      (product) =>
+        ("precio_pendiente" in product && product.precio_pendiente) ||
+        ("unidad" in product && product.unidad === "venta-pendiente"),
+    );
+
+    if (pendingPriceProduct) {
+      return NextResponse.json(
+        { error: "Hay un producto sin precio definido en el pedido" },
+        { status: 400 },
+      );
+    }
 
     pedido.items = pedido.items.map((item) => {
       const productId = String(item.producto_id ?? "").trim();
@@ -83,6 +114,11 @@ export async function POST(request: Request) {
         ...item,
         costo: productCosts.get(productId) ?? toNumber(item.costo),
       };
+    });
+    pedido.stock = pedido.stock.filter((item) => productTracksStock.get(item.id) ?? true);
+    pedido.movimientos = pedido.movimientos.filter((item) => {
+      const productId = String(item.producto_id ?? "").trim();
+      return !productId || (productTracksStock.get(productId) ?? true);
     });
 
     const branchId = String(
@@ -186,12 +222,23 @@ export async function DELETE(request: Request) {
       ),
     ];
 
-    const products = productIds.length
+    const productsWithPolicy = productIds.length
       ? await supabase
           .from("productos")
-          .select("id,stock,consumo_gustos")
+          .select("id,stock,consumo_gustos,controla_stock")
           .in("id", productIds)
       : { data: [], error: null };
+
+    const products =
+      productsWithPolicy.error?.code === "42703" ||
+      productsWithPolicy.error?.code === "PGRST204"
+        ? productIds.length
+        ? await supabase
+            .from("productos")
+            .select("id,stock,consumo_gustos,unidad")
+            .in("id", productIds)
+          : { data: [], error: null }
+        : productsWithPolicy;
 
     if (products.error) {
       return NextResponse.json({ error: products.error.message }, { status: 500 });
@@ -203,13 +250,21 @@ export async function DELETE(request: Request) {
         Number(product.consumo_gustos ?? 0) || 0,
       ]),
     );
+    const productTracksStock = new Map(
+      (products.data ?? []).map((product) => [
+        product.id,
+        "controla_stock" in product
+          ? product.controla_stock ?? true
+          : !("unidad" in product && String(product.unidad).startsWith("venta")),
+      ]),
+    );
 
     for (const item of items.data ?? []) {
       const productId = String(item.producto_id ?? "").trim();
       const quantity = Number(item.cantidad ?? 0) || 0;
       const flavors = Array.isArray(item.gustos) ? item.gustos : [];
 
-      if (productId) {
+      if (productId && (productTracksStock.get(productId) ?? true)) {
         productQuantities.set(
           productId,
           (productQuantities.get(productId) ?? 0) + quantity,

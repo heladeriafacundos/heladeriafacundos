@@ -21,6 +21,9 @@
 /build
 /dist-electron
 
+# local database backups
+/supabase/backups/
+
 # misc
 .DS_Store
 *.pem
